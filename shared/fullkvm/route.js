@@ -13,7 +13,7 @@ const { SvcLink, KVM } = require('./svc-link.js');
 
 const SVC_SOCK = process.env.TWINDESK_KVM_SOCK || (process.platform === 'win32' ? '\\\\.\\pipe\\TwinDesk.kvm' : '/run/twindesk/kvm.sock');
 // The helpers' mouse-and-keyboard events (linux-helper/src: capture.c, wl.c; windows-helper/src: Capture*.cs).
-const KVM_EVENTS = new Set(['edge', 'return', 'ev', 'hotkey', 'captureEnded', 'released', 'local', 'shake', 'lane', 'laneEv', 'hooksReinstalled', 'secureDesktop']);
+const KVM_EVENTS = new Set(['edge', 'return', 'ev', 'hotkey', 'captureEnded', 'released', 'local', 'shake', 'lane', 'laneEv', 'hooksReinstalled', 'secureDesktop', 'letGo']);
 
 module.exports = (Helper) => class FullKvmHelper extends Helper {
   constructor(...args) {
@@ -68,7 +68,9 @@ module.exports = (Helper) => class FullKvmHelper extends Helper {
 
   request(cmd, args = {}, ms) {
     if (this.viaService && KVM.has(cmd)) return this.svc.request(cmd, args, ms);
-    if (this.viaService && cmd === 'lane') return Promise.reject(new Error('no native lane through Full KVM'));
+    // Not before the service is up either: a lane bound on our helper while it starts (kvm.js asks at
+    // once) took the moves there, past the service's return watch, and the pointer never came back.
+    if (this.svc && cmd === 'lane') return Promise.reject(new Error('no native lane with Full KVM'));
     return super.request(cmd, args, ms);
   }
 
