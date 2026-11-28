@@ -310,6 +310,12 @@ Everyone who sent code, reported a problem or tested is thanked under their vers
   goes straight to the speakers. Mute while sending now works on Linux too. The Linux part was tested
   on Ubuntu 24.04 (PipeWire); the Windows part is compiled by CI and untested on a PC.
 
+- **Drive** no longer sends its whole index to every computer each time a connection comes back.
+  A computer whose network card kept dropping every few seconds sent 2.5 MB (10,000 files) to each
+  device on every reconnect, tens of MB a minute. Now a returning computer gets only what changed
+  since it last had everything (usually nothing), the index goes in parts a little apart, and a
+  computer that came back 3 times within a minute waits until its link stays up before Drive syncs.
+  An older TwinDesk on the other side still gets the whole index, as before.
 - Phone app windows open and resize to a phone-like size (a multiple of 16, no shape past 22:9):
   some apps, a phone maker's Camera among them, stopped on odd sizes.
 

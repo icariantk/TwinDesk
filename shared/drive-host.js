@@ -73,7 +73,9 @@ const { safeName, cleanDevices } = DF;
 
 function createMesh({ settings, save, me, meName, userData, trash, mesh, onChange = () => {} }) {
   let Drive = null, DriveLink = null, HEADER = '', PATH = '', hooked = false, running = false;
-  const units = new Map(); // folder id ('' = the main folder) -> {drive, links: Map(peer id -> DriveLink), error}
+  const units = new Map(); // folder id ('' = the main folder) -> {drive, links: Map(peer id -> DriveLink), memories, error}
+  // memories: Map(peer id -> DriveLink's memory): where we are in that computer's index of the folder and
+  // its reconnects, across its sessions (a link is made per session); gone with the folder's engine.
   const theirs = new Map(); // peer id -> Map(f -> name): the extra folders it shares with us
   const cfg = () => {
     const c = settings.drive || (settings.drive = { on: false, folder: '' });
@@ -94,7 +96,8 @@ function createMesh({ settings, save, me, meName, userData, trash, mesh, onChang
     const u = units.get(f);
     if (!u || !u.drive || !canLink(f, id)) return null;
     if (u.links.has(id)) return u.links.get(id);
-    const l = new DriveLink({ drive: u.drive, folder: f, send: (m) => mesh.send(id, m), session: () => mesh.session(id), peerName: () => mesh.peerName(id), onChange });
+    if (!u.memories.has(id)) u.memories.set(id, {});
+    const l = new DriveLink({ drive: u.drive, folder: f, send: (m) => mesh.send(id, m), session: () => mesh.session(id), peerName: () => mesh.peerName(id), onChange, memory: u.memories.get(id) });
     u.links.set(id, l);
     return l;
   };
@@ -173,7 +176,7 @@ function createMesh({ settings, save, me, meName, userData, trash, mesh, onChang
 
   async function startUnit(f) {
     if (units.has(f)) return;
-    const u = { drive: null, links: new Map(), error: '' };
+    const u = { drive: null, links: new Map(), memories: new Map(), error: '' };
     units.set(f, u);
     const drive = new Drive({ me, meName, folder: () => pathOf(f), indexFile: path.join(userData, f ? `drive-index-${f}.json` : 'drive-index.json'), trash });
     drive.on('change', onChange);
