@@ -163,7 +163,8 @@ const UI = {
     row.setHint = (t) => {
       if (!literal && String(t || '').includes('{')) hintEl.dataset.peer = t;
       else delete hintEl.dataset.peer;
-      hintEl.textContent = fill(t || '');
+      const text = fill(t || '');
+      if (hintEl.textContent !== text) hintEl.textContent = text; // the same text: left alone (no repaint)
       hintEl.hidden = !t;
     };
     if (onClick) {
@@ -188,7 +189,7 @@ const UI = {
     const fill = (value) => literal ? value || '' : UI.fill(value);
     const n = UI.el('div', { class: `note ${kind}`, text: fill(text) });
     if (literal) n.dataset.literal = '';
-    n.set = (t) => { n.textContent = fill(t || ''); n.hidden = !t; };
+    n.set = (t) => { const v = fill(t || ''); if (n.textContent !== v) n.textContent = v; n.hidden = !t; }; // the same text: left alone (no repaint)
     return n;
   },
 

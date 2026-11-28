@@ -105,13 +105,15 @@ function create({ settings, save, me, meName, userData, trash, adapter, onChange
 function createMesh({ settings, save, me, meName, userData, trash, mesh, onChange = () => {} }) {
   let drive = null, DriveLink = null, HEADER = '', PATH = '', hooked = false, error = '';
   const links = new Map(); // peer id -> DriveLink, while that computer is connected
+  let memories = new Map(); // peer id -> where we are in its index, its reconnects (DriveLink's memory)
   const cfg = () => settings.drive || (settings.drive = { on: false, folder: '' });
   const folder = () => cfg().folder || defaultFolder();
 
   const open = (id) => {
     if (links.has(id)) return links.get(id);
     if (!drive || !id || !mesh.isComputer(id)) return null;
-    const l = new DriveLink({ drive, send: (m) => mesh.send(id, m), session: () => mesh.session(id), peerName: () => mesh.peerName(id), onChange });
+    if (!memories.has(id)) memories.set(id, {});
+    const l = new DriveLink({ drive, send: (m) => mesh.send(id, m), session: () => mesh.session(id), peerName: () => mesh.peerName(id), onChange, memory: memories.get(id) });
     links.set(id, l);
     return l;
   };
@@ -175,6 +177,7 @@ function createMesh({ settings, save, me, meName, userData, trash, mesh, onChang
   async function stop() {
     mesh.setRequest(null);
     for (const id of [...links.keys()]) close(id);
+    memories = new Map(); // a new engine (another folder, Drive switched on again): everything once
     const d = drive;
     drive = null;
     if (d) await d.stop();

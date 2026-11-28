@@ -167,6 +167,18 @@ Everyone who sent code, reported a problem or tested is thanked under their vers
 
 ### Fixed
 
+- **Drive** no longer sends its whole index to every computer each time a connection comes back.
+  A computer whose network card kept dropping every few seconds sent 2.5 MB (10,000 files) to each
+  device on every reconnect, tens of MB a minute. Now a returning computer gets only what changed
+  since it last had everything (usually nothing), the index goes in parts a little apart, and a
+  computer that came back 3 times within a minute waits until its link stays up before Drive syncs.
+  An older TwinDesk on the other side still gets the whole index, as before. A merge that changed
+  nothing no longer writes the whole index file again (2.7 MB for 10,000 files).
+- The TwinDesk window no longer keeps repainting while it's open behind other windows, about 5% CPU
+  each for it and the GPU process. A connected device's breathing dot (and the other endless
+  animations) now wait while another window is in front and go on when you come back; the Debug page
+  draws its device list again only when something on it changed, not on every update (more than 100
+  changes a second); and a hint or note set to the text it already shows is left alone.
 - Phone app windows open and resize to a phone-like size (a multiple of 16, no shape past 22:9):
   some apps, a phone maker's Camera among them, stopped on odd sizes.
 
