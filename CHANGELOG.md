@@ -172,7 +172,12 @@ Everyone who sent code, reported a problem or tested is thanked under their vers
   device on every reconnect, tens of MB a minute. Now a returning computer gets only what changed
   since it last had everything (usually nothing), the index goes in parts a little apart, and a
   computer that came back 3 times within a minute waits until its link stays up before Drive syncs.
-  An older TwinDesk on the other side still gets the whole index, as before.
+  An older TwinDesk on the other side still gets the whole index, as before. A merge that changed
+  nothing no longer writes the whole index file again (2.7 MB for 10,000 files).
+- The TwinDesk window no longer repaints 60 times a second while it's open behind other windows:
+  a connected device's breathing dot (and the other endless animations) kept the window and the GPU
+  process busy, about 5% CPU each and 1 MB/s between them. They now wait while another window is
+  in front and go on when you come back to TwinDesk.
 - Phone app windows open and resize to a phone-like size (a multiple of 16, no shape past 22:9):
   some apps, a phone maker's Camera among them, stopped on odd sizes.
 

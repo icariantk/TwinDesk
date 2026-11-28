@@ -432,8 +432,10 @@ class Drive extends EventEmitter {
       }
       // ours wins: nothing here; the other device keeps its copy as the conflict and takes ours
     }
-    this._save();
-    if (changed.length) this._changed(changed);
+    if (changed.length) { // every change to the index here is in changed: nothing else to write
+      this._save();
+      this._changed(changed);
+    }
     this.emit('change');
     return withDeferred(pulls, deferred);
   }
