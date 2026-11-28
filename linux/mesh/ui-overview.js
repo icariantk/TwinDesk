@@ -156,11 +156,14 @@ UI.tab({
 
     const pairedList = el('div');
     const webCard = UI.webConnCard ? UI.webConnCard() : null; // TwinDesk Web's paired devices (shared/ui-web.js)
+    const doctor = UI.connectionDoctor ? UI.connectionDoctor('linux') : null;
+
     body.append(
       UI.card('', [addrRow, ipRow]),
       UI.card(t('Found nearby'), [discRow, foundList, ...bleRows], { actions: [refresh] }),
       ...(qrPair ? [qrPair.el] : []),
       hero,
+      ...(doctor ? [doctor.el] : []),
       adb.el,
       ...(tether ? [tether.el] : []),
       pair.el,
@@ -173,6 +176,7 @@ UI.tab({
     let pairedKey = '';
     const render = () => last && update(last);
     const update = (s) => {
+      if (doctor) doctor.update(s);
       if (webCard) webCard.render(s);
       last = s;
       bleSw.set(!s.net || s.net.ble !== false);
@@ -187,7 +191,7 @@ UI.tab({
       else peerDev.style.removeProperty('--phone-wall');
       linkLine.className = 'hero-link' + (connected ? ' up' : '');
       const ble = s.net && s.net.transport === 'ble';
-      linkText.textContent = connected ? (l.rtt != null ? l.rtt + ' ms · ' : '') + UI.via(s)
+      linkText.textContent = connected ? (l.rtt != null ? l.rtt + ' ms, ' : '') + UI.via(s)
         : s.pairing ? t('Pairing…') : s.paired ? t('Connecting…') : t('Not connected');
       const bad = l.state === 'identity_changed';
       status.textContent = bad ? t('This {kind} looks different now. Forget it and pair again.', { kind: t(p.kind) })

@@ -88,6 +88,8 @@ class Core private constructor(val ctx: Context) : Link.Events {
     val shots = Screenshots(this) // screenshots both ways, onto the other clipboard
     val nowPlaying = NowPlaying(this) // what plays here, for the computer's media controls
     val rezume = Rezume(this) // ReZume: go on with what's in use on the other device (off until turned on)
+    val drop = Drop(this) // Drop: one conversation with every device (shared/drop.js)
+    val mesh = MeshMgr(this) // the whole mesh's computers on Overview (shared/mesh-manage.js): asks only while shown
     val dev = DevCtl(this) // this phone's controls on the computer's Overview, the computer's on the Computer page
     val appList = AppList(this) // the phone's apps, for the pages that pick some (Notifications, Banking apps)
     val bank = BankGuard(this) // a banking app opened: debugging off, and TwinDesk exits (General › Banking apps)
@@ -99,12 +101,13 @@ class Core private constructor(val ctx: Context) : Link.Events {
     // shown and its features hear nothing from the computer.
     val modulesAtStart: Set<String> = Modules.off(store)
     fun moduleOn(id: String) = id in Modules.FIXED || id !in modulesAtStart
-    private val features: List<Feature> = listOf(net, sync, clip, notifs, files, fclip, info, apps, wake, adb, pointer, input, drive, screen, macSound, shortcuts, kvm, remote, hub, share, sound, mirror, shots, nowPlaying, rezume, dev, pcMedia, deck, tether)
+    private val features: List<Feature> = listOf(net, sync, clip, notifs, files, fclip, info, apps, wake, adb, pointer, input, drive, screen, macSound, shortcuts, kvm, remote, hub, share, sound, mirror, shots, nowPlaying, rezume, dev, mesh, pcMedia, deck, tether, drop)
         .filter { f ->
             when (f) {
                 clip, fclip -> moduleOn("clipboard")
                 notifs -> moduleOn("notifications")
                 rezume -> moduleOn("rezume")
+                drop -> moduleOn("drop")
                 remote -> moduleOn("remote")
                 pcMedia, nowPlaying -> moduleOn("media")
                 sound, macSound -> moduleOn("sound")
@@ -412,7 +415,8 @@ class Core private constructor(val ctx: Context) : Link.Events {
         resumeUntil = 0
         resumeHost = null
         resumeLater = null
-        link.disconnect()
+        link.disconnect() // parting first, so a queue flush already in flight cannot send
+        clip.abandonQueue()
     }
 
     // Another paired computer, while connected: this one is let go (bye), then that one.
@@ -461,6 +465,7 @@ class Core private constructor(val ctx: Context) : Link.Events {
     }
 
     fun forget(id: String) {
+        clip.forgetQueue(id)
         if (returnHost()?.id == id) stopReturn()
         if (link.host?.id == id) link.disconnect()
         store.forgetHost(id)
@@ -490,6 +495,7 @@ class Core private constructor(val ctx: Context) : Link.Events {
     // ---- Link.Events ----
 
     override fun onChange() {
+        screen.doctorLinkChanged()
         runCatching { share.linkChanged() } // the session moved (Bluetooth <-> Wi-Fi): shared folders follow
         runCatching { remote.linkChanged() } // … and the Remote page's pace
         changed()
@@ -515,11 +521,17 @@ class Core private constructor(val ctx: Context) : Link.Events {
         changed()
     }
 
-    override fun onMessage(m: JSONObject) {
+    override fun onMessage(m: JSONObject, route: Link.TrustedRoute?, source: okhttp3.WebSocket) {
         val t = m.optString("t")
         main.post {
+            if (t == "rtc.offer") {
+                screen.onOffer(m, route)
+                return@post
+            }
             for (f in features) {
-                val mine = try { f.onMessage(t, m) } catch (e: Exception) { Log.e("TwinDesk", "message $t", e); true }
+                val mine = try {
+                    if (f === clip) clip.onMessage(t, m, route) else f.onMessage(t, m)
+                } catch (e: Exception) { Log.e("TwinDesk", "message $t", e); true }
                 if (mine) return@post
             }
         }
@@ -527,6 +539,8 @@ class Core private constructor(val ctx: Context) : Link.Events {
 
     override fun onClosed(host: Host, code: String?) {
         main.post {
+            // bad_token forgets the pair in Link before this runs. A drop keeps the while-away queue.
+            clip.onSessionEnded(code, host.id)
             for (f in features) runCatching { f.onClosed() }
             changed()
         }

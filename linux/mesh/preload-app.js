@@ -67,6 +67,8 @@ contextBridge.exposeInMainWorld('macshare', {
   relaunch: call('relaunch'),
   setAudio: call('setAudio'),
   camera: call('camera'),
+  drop: call('drop'), // Drop (shared/drop-host.js)
+  soundRoute: call('soundRoute'), soundVolume: call('soundVolume'), // Audio › the mixer
   deckSave: call('deckSave'), deckTry: call('deckTry'), deckApps: call('deckApps'), deckState: call('deckState'), deckRun: call('deckRun'), deckPick: call('deckPick'), // the Deck page
   iosSign: call('iosSign'), iosSignIpa: call('iosSignIpa'), // TwinDesk iPhone (shared/iossign.js)
   setRemote: call('setRemote'), // Remote tab (shared/phone-remote.js)
@@ -83,6 +85,8 @@ contextBridge.exposeInMainWorld('macshare', {
   pickDriveFolder: call('pickDriveFolder'),
   resetDriveFolder: call('resetDriveFolder'),
   openDriveFolder: call('openDriveFolder'),
+  folderShare: call('folderShare'), folderSheet: call('folderSheet'), folderAdd: call('folderAdd'), folderRemove: call('folderRemove'), // Shared folders (shared/folders-host.js)
+  folderDevices: call('folderDevices'), folderAccept: call('folderAccept'), folderDecline: call('folderDecline'), folderOpen: call('folderOpen'),
   cancelDrop: call('cancelDrop'),
   pauseSend: call('pauseSend'),
   resumeSend: call('resumeSend'),
@@ -133,7 +137,9 @@ contextBridge.exposeInMainWorld('macshare', {
   setNet: call('setNet'),
   wifiSetup: call('wifiSetup'),
   setMesh: call('setMesh'),
+  setCell: call('setCell'), // Notifications › Across devices: any cell
   setConsent: call('setConsent'), // the matrix: one of this computer's own cells
+  setManage: call('setManage'), // Multi-device › Phones (shared/mesh-manage.js)
   debugAsk: call('debugAsk'), // Debug: ask a device of the mesh (or 'self') — shared/debug-start.js
   setDebug: call('setDebug'), // Debug › This computer: who may debug it, Allow any command
   debugShow: call('debugShow'), // Debug: show a kept log or screenshot in its folder

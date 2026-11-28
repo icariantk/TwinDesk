@@ -9,6 +9,9 @@ const { Helper } = require('./helper');
 const { Displays } = require('./displays');
 const { Stream } = require('./stream');
 const { Input } = require('./input');
+const { SpaceSwitch, SpaceLook, DesktopRefresh } = require('./space-switch');
+const P = require('../shared/protocol.js');
+const Spaces = require('../shared/mac-spaces.js');
 const { Clipboard } = require('./clipboard');
 const { Kvm } = require('./kvm');
 const { Terminal } = require('./terminal');
@@ -27,7 +30,7 @@ const { Wake } = require('./wake');
 const { AppSend } = require('./appsend');
 const store = require('./store');
 
-function startServices({ server, getSettings, pushState, onHelperReady }) {
+function startServices({ server, getSettings, pushState, onHelperReady, clipboardPair }) {
   const s = getSettings;
   server.setMaxListeners(50); // one 'client'/'closed' listener per feature
   const helper = new Helper();
@@ -41,7 +44,27 @@ function startServices({ server, getSettings, pushState, onHelperReady }) {
     enabled: () => s().streamInput !== false && (!kvm || kvm.mode === 'home'),
     swapKeys: () => server.keySwap(s()), // never between two Macs
   });
-  const clipboard = new Clipboard(server, helper, s);
+  // Previous/next desktop on the display this viewer is being shown. Same gate as stream input.
+  const spaces = new SpaceSwitch({
+    listen: (fn) => server.on(`t:${P.T.SCREEN_SPACE}`, fn),
+    helper,
+    enabled: () => s().streamInput !== false && (!kvm || kvm.mode === 'home'),
+    authorize: (ctx) => Spaces.streamInputGate(ctx, () => server.current),
+    targetFor: () => stream.viewedDisplay(),
+    reply: (ctx, msg) => server.send(ctx, msg),
+    names: () => Spaces.catalogOffer(displays.list(), { remote: s().sharing.remote !== false, held: displays.holds.has('apps-open') }).named,
+    offerDisplays: () => Spaces.catalogOffer(displays.list(), { remote: s().sharing.remote !== false, held: displays.holds.has('apps-open') }).offerDisplays,
+  });
+  const spaceLook = new SpaceLook(helper, pushState);
+  const desktopRefresh = new DesktopRefresh({
+    listen: (fn) => server.on(`t:${P.T.SCREEN_DESKTOPS}`, fn),
+    authorize: (ctx) => Spaces.streamInputGate(ctx, () => server.current),
+    viewFor: () => stream.viewedDisplay(),
+    spaceLook,
+    reply: (ctx, msg) => server.send(ctx, msg),
+  });
+
+  const clipboard = new Clipboard(server, helper, s, clipboardPair);
   const drop = new Drop({ server, helper, displays, getSettings: s });
   const fileSend = new FileSend(server, s, { outboxFile: require('path').join(require('electron').app.getPath('userData'), 'outbox.json') });
   kvm = new Kvm({ server, helper, getSettings: s, clipboard, input, drop, fileSend });
@@ -51,7 +74,7 @@ function startServices({ server, getSettings, pushState, onHelperReady }) {
 
   const apps = new Apps({ server, helper, displays, stream, getSettings: s });
   const sshClient = new SshClient(server, s);
-  const audio = new Audio({ server, hub, stream, getSettings: s });
+  const audio = new Audio({ server, hub, stream, getSettings: s, saveSettings: () => store.saveSettings(s()) }); // save: the mixer's routes
   const pcView = new PcView({ server, getSettings: s, saveSettings: () => store.saveSettings(s()) });
   const pcApps = new PcApps({ server, getSettings: s });
   const notifs = new Notifs({ server, helper, getSettings: s, saveSettings: () => store.saveSettings(s()) });
@@ -104,7 +127,7 @@ function startServices({ server, getSettings, pushState, onHelperReady }) {
   helper.start();
 
   return {
-    helper, displays, stream, input, clipboard, kvm, terminal, drop, smb, apps, sshClient, audio, pcView, pcApps, hub, fileSend, notifs, history, fileClip, wake, appSend, updateAwake,
+    helper, displays, stream, input, spaces, spaceLook, desktopRefresh, clipboard, kvm, terminal, drop, smb, apps, sshClient, audio, pcView, pcApps, hub, fileSend, notifs, history, fileClip, wake, appSend, updateAwake,
     shutdown() {
       pcView.shutdown();
       pcApps.shutdown();

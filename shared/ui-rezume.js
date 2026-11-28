@@ -40,6 +40,23 @@
     for (const el of root.querySelectorAll('[data-peer]')) if (el.childNodes.length <= 1) el.textContent = put(el.dataset.peer);
   }
 
+  // Multi-device, turned on with no device picked: which one (ReZume is with one device at a time).
+  // One connected: that one, without asking. Several: the tab itself asks, at its top (drawAsk in
+  // build); Cancel leaves ReZume off. True when it took over turning ReZume on.
+  let asking = false;
+  let drawAsk = () => {};
+  const goWith = (id) => { asking = false; UI.api.rezumeDo({ a: 'with', id }); UI.api.setReZume({ on: true }); drawAsk(); };
+  function askWith(on) {
+    const mw = on && UI.state && UI.state.rezume && UI.state.rezume.meshWith;
+    if (!mw || mw.with) return false;
+    const devs = mw.devices || [];
+    if (!devs.length) return false;
+    if (devs.length === 1) { goWith(devs[0].id); return true; }
+    asking = true;
+    drawAsk();
+    return true;
+  }
+
   // The other device's offer: its icon, what it is, Open and Dismiss. update(s, always): shown while
   // there is one (always: on the ReZume tab; elsewhere only with "On the Apps and Phone pages").
   UI.rezumeCard = function () {
@@ -65,10 +82,10 @@
           icon.replaceChildren(UI.appIcon(i.icon));
         }
         row.label.textContent = i.title || i.name || i.appName;
-        row.setHint(kindWord(i) + ' · ' + (i.kind === 'web' ? hostOf(i.url) : i.kind === 'doc' ? i.name + (i.size ? ', ' + size(i.size) : '')
+        row.setHint(kindWord(i) + ', ' + (i.kind === 'web' ? hostOf(i.url) : i.kind === 'doc' ? i.name + (i.size ? ', ' + size(i.size) : '')
           : i.kind === 'window' ? tr('{app}, in a window here', { app: i.appName || i.app })
             : (h.mirrorReady ? tr('{app}, in a window here', { app: i.appName || i.app }) : (i.appName || i.app)))
-          + (i.appName && i.kind !== 'app' && i.kind !== 'window' ? ' · ' + i.appName : ''));
+          + (i.appName && i.kind !== 'app' && i.kind !== 'window' ? ', ' + i.appName : ''));
       },
     };
   };
@@ -83,7 +100,7 @@
     badge: (s) => (s.rezume && s.rezume.on ? 'on' : ''),
     master: {
       get: (s) => !!(s.rezume && s.rezume.on),
-      set: (v) => UI.api.setReZume({ on: v }),
+      set: (v) => askWith(v) || UI.api.setReZume({ on: v }),
       disabled: (s) => !s.rezume,
     },
     build(body) {
@@ -102,9 +119,28 @@
 
       // Multi-device: which device ReZume is with (the same on both: picking here picks this one there).
       const withPick = UI.select([], (id) => api.rezumeDo({ a: 'with', id }));
-      const withRow = UI.row(tr('ReZume with'), tr('The device to go on with. It picks this computer there too, and the one either was with before lets go.'), [withPick.el], { literal: true });
+      const withRow = UI.row(tr('ReZume with'), tr('A computer you select also selects this one.'), [withPick.el], { literal: true });
       const withCard = UI.card(tr('Multi-device'), [withRow]);
       withCard.hidden = true;
+      // Turned on with no device picked (askWith): the choice, at the top of the tab.
+      const askList = UI.el('div');
+      const askCancel = UI.button(tr('Cancel'), () => { asking = false; UI.api.setReZume({ on: false }); drawAsk(); }, 'small');
+      const askCard = UI.card(tr('ReZume with which device?'), [
+        UI.row(tr('One device at a time'), tr('ReZume goes on with one device at a time. A computer you choose chooses this one too.'), [askCancel]),
+        askList,
+      ], { cls: 'keep-on' });
+      askCard.hidden = true;
+      let askKey = '';
+      drawAsk = () => {
+        const mw = UI.state && UI.state.rezume && UI.state.rezume.meshWith;
+        if (asking && (!mw || mw.with)) asking = false; // picked meanwhile (the picker below, or the other computer)
+        const devs = asking ? mw.devices || [] : [];
+        const k = asking ? JSON.stringify(devs) : '';
+        askCard.hidden = !asking;
+        if (k === askKey) return;
+        askKey = k;
+        askList.replaceChildren(...devs.map((d) => UI.row(d.name, '', [UI.osIcon(d.os), UI.button(tr('Choose'), () => goWith(d.id), 'small primary')], { literal: true })));
+      };
       const status = UI.row('{name}', '');
       const out = UI.row('', '', [], { literal: true });
       const push = UI.button(tr('Send'), () => api.rezumeDo({ a: 'push' }), 'small');
@@ -167,7 +203,7 @@
       const tabRow = UI.row(tr('Apps and Phone pages'), '', [sw.tab.el]);
       const where = UI.card(tr('Show in'), [notifyRow, barRow, trayRow, tabRow]);
 
-      body.append(withCard, note, offer.el, now, info, what, ways, winList.el, fileList.el, where);
+      body.append(askCard, withCard, note, offer.el, now, info, what, ways, winList.el, fileList.el, where);
 
       return (s) => {
         const h = s.rezume || {};
@@ -175,6 +211,7 @@
         const p = mw ? partnerPeer(s, mw) : UI.peer(s);
         const fill = (t) => String(t).replace(/\{(\w+)\}/g, (m, k) => (k in p ? p[k] : m));
         withCard.hidden = !mw;
+        drawAsk();
         if (mw) {
           body.setAttribute('data-literal', '');
           const opts = [{ value: '', label: tr('No device') }, ...(mw.devices || []).map((d) => ({ value: d.id, label: d.name }))];
@@ -213,13 +250,13 @@
                   : tr('Ready'));
         out.hidden = !h.out;
         if (h.out) {
-          out.setHint(h.out.title + (h.out.kind === 'web' ? ' · ' + hostOf(h.out.url) : h.out.kind === 'doc' ? ' · ' + h.out.name : h.out.kind === 'window' ? ' · ' + tr('Window') : ''));
+          out.setHint(h.out.title + (h.out.kind === 'web' ? ', ' + hostOf(h.out.url) : h.out.kind === 'doc' ? ', ' + h.out.name : h.out.kind === 'window' ? ', ' + tr('Window') : ''));
         }
         outRow.hidden = !h.on || !h.connected;
         push.disabled = !h.last;
         outRow.setHint(h.last ? h.last.title : tr('Nothing to send yet'));
         // Multi-device (shared/rezume-solo.js): with the device picked above (an older app: only a phone alone).
-        const meshWhy = h.mesh === 'pick' ? tr('Pick the device to go on with above, under ReZume with.')
+        const meshWhy = h.mesh === 'pick' ? tr('Select a device under ReZume with.')
           : h.mesh === 'computer' ? tr('ReZume with a computer needs Multi-device off: turn it off on the Multi-device page and connect the two directly. In Multi-device, ReZume works with one phone.')
           : h.mesh === 'many' ? tr('In Multi-device, ReZume works only while one phone is the only device connected. Disconnect the others, or turn Multi-device off on the Multi-device page for ReZume with a computer.') : '';
         note.set(meshWhy || (h.on ? tr(h.why || '') : ''));

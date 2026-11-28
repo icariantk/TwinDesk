@@ -36,6 +36,17 @@ func replyError(_ id: Any?, _ message: String) {
   emit(["id": id!, "ok": false, "error": message])
 }
 
+/// Why remote input is paused. Hidden while a switch is still opening stays
+/// "overview": that read is not a safe place to send a touch.
+func spaceHoldWhy(_ input: PollInput) -> String {
+  switch input {
+  case .unreadable, .ambiguousHost:
+    return "accessibility"
+  case .show:
+    return "overview"
+  }
+}
+
 let virtualDisplay = VirtualDisplay()
 let injector = Injector()
 let pasteboardWatch = PasteboardWatch()
@@ -75,16 +86,13 @@ func handle(_ line: String) {
   Capture.shared.touch() // every command is a keepalive for the capture dead-man
   let num = { (k: String, d: Double) in (msg[k] as? NSNumber)?.doubleValue ?? d }
   switch cmd {
-#if !MULTI
   case "portalCapabilities":
     reply(id, ["version": 3])
-#endif
   case "kvmConfig":
     Capture.shared.emergencyShortcut = EmergencyShortcut((msg["emergencyKeys"] as? String) ?? EmergencyShortcut.fallback)
     Capture.shared.edgeZones = zones(msg["zones"])
     Capture.shared.crossingModifier = (msg["crossingModifier"] as? String) ?? ""
     Capture.shared.takeBack = (msg["takeBack"] as? Bool) ?? true
-#if !MULTI
     Capture.shared.portals = ((msg["portals"] as? [[String: Any]]) ?? []).compactMap { value in
       guard let id = value["id"] as? String, let source = value["source"] as? [String: Any],
             let display = source["display"] as? String, let displayID = UInt32(display),
@@ -106,7 +114,6 @@ func handle(_ line: String) {
       if !key.isEmpty && vk == nil { return nil }
       return Capture.Portal(id: id, side: side, display: displayID, from: from, to: to, flags: flags, key: vk)
     }
-#endif
     guard Capture.shared.startTap() else { return replyError(id, "event tap failed (Accessibility / Input Monitoring)") }
     Flash.shared.prepare()
 #if MULTI
@@ -152,7 +159,6 @@ func handle(_ line: String) {
     Capture.shared.arrived(side: side)
     Flash.shared.arrive(at: to, side: side) // the PC's pointer arrives here
     reply(id)
-#if !MULTI
   case "placePortal":
     guard let display = msg["display"] as? String, let displayID = UInt32(display),
           CGDisplayIsActive(displayID) != 0,
@@ -177,11 +183,20 @@ func handle(_ line: String) {
     Capture.shared.arrived(side: side)
     Flash.shared.arrive(at: to, side: side)
     reply(id)
-#endif
   case "armReturn":
     Capture.shared.returnZones = zones(msg["zones"])
     Capture.shared.returnRequiresModifier = (msg["requireModifier"] as? Bool) ?? false
 #if MULTI
+    // Came in through a portal (kvm.take portal): the way back is its range (`sides` is its side alone).
+    if (msg["on"] as? Bool) == true, let value = msg["portal"] as? [String: Any],
+       let display = value["display"] as? String, let displayID = UInt32(display), CGDisplayIsActive(displayID) != 0,
+       let side = value["side"] as? String, ["left", "right", "top", "bottom"].contains(side),
+       let from = (value["from"] as? NSNumber)?.doubleValue, let to = (value["to"] as? NSNumber)?.doubleValue,
+       from.isFinite, to.isFinite, from >= 0, to <= 1, from < to {
+      Capture.shared.portalReturn = Capture.PortalReturn(display: displayID, side: side, from: from, to: to)
+    } else {
+      Capture.shared.portalReturn = nil
+    }
     let sides = (msg["sides"] as? [String]) ?? [(msg["side"] as? String) ?? "right"]
     Capture.shared.armReturn(on: (msg["on"] as? Bool) ?? false, sides: sides, resistance: num("resistancePx", 120))
 #else
@@ -262,6 +277,54 @@ func handle(_ line: String) {
       case .failure(let err): replyError(id, err.message)
       }
     }
+  case "displayShot":
+    // One display. macOS 14 ScreenCaptureKit, or an honest refusal. It does not switch desktops,
+    // prompt for Screen Recording, or capture any display other than displayId.
+    // The token is taken before the hop, so a cancel that arrives while the screenshot
+    // is in flight makes that reply stale instead of a JPEG.
+    let shotId = (msg["displayId"] as? NSNumber)?.uint32Value ?? 0
+    guard shotId != 0 else { return replyError(id, "display") }
+    let shotToken = ShotEpoch.begin()
+    Task {
+      let shot = await DisplayShot.take(displayId: shotId, token: shotToken)
+      if let why = shot["unavailable"] as? String { reply(id, ["unavailable": why]) }
+      else { reply(id, shot) }
+    }
+  case "displayShotCancel":
+    // Drops a screenshot that has already left this thread. The capture call itself
+    // cannot be aborted; the reply comes back unavailable, with no JPEG.
+    ShotEpoch.cancel()
+    reply(id)
+  case "spacesLook": // read which desktops each display owns; does not move one.
+    // A hidden read may resume remote input. An unknown read does not. This
+    // command never opens Mission Control or presses a thumbnail.
+    // overview is a fresh accessibility read, including when TwinDesk itself is not
+    // holding input. inputHeld is not that read: a Mission Control the person opened
+    // leaves it false. "unknown" is not hidden.
+    SpaceOverview.shared.recoverHidden()
+    var looked = MacSpaces.look()
+    if let err = looked["error"] as? String { replyError(id, err) } else {
+      let held = injector.remoteOverview
+      let overview = MissionControlAccess.snapshot()
+      looked["ax"] = AXIsProcessTrusted()
+      looked["inputHeld"] = held
+      looked["overview"] = OverviewReport.token(overview)
+      if held { looked["holdWhy"] = spaceHoldWhy(overview) }
+      reply(id, looked)
+    }
+  case "spacesAbort": // before AXPress. A replaced session is this command, not a check after the press.
+    SpaceOverview.shared.abort(id: id, token: (msg["token"] as? String) ?? "")
+  case "spacesCommit": // next turn presses unless abort already settled it. The reply waits for the postcheck.
+    SpaceOverview.shared.commit(id: id, token: (msg["token"] as? String) ?? "")
+  case "spacesSwitch": // arms the overview. The reply is phase armed, or a why. It does not press.
+    guard let displayId = (msg["displayId"] as? NSNumber)?.uint32Value, displayId != 0,
+          let space = msg["spaceId"] as? String, !space.isEmpty, space.allSatisfy({ $0.isNumber }),
+          let spaceId = UInt64(space), spaceId != 0,
+          let index = (msg["index"] as? NSNumber)?.intValue, index >= 0,
+          let count = (msg["count"] as? NSNumber)?.intValue, count > index,
+          let token = msg["token"] as? String
+    else { return replyError(id, "unavailable") }
+    SpaceOverview.shared.begin(id: id, displayId: displayId, spaceId: spaceId, index: index, count: count, token: token)
   case "input":
     guard let ev = msg["ev"] as? [String: Any], let b = msg["bounds"] as? [String: Any],
           let x = (b["x"] as? NSNumber)?.doubleValue, let y = (b["y"] as? NSNumber)?.doubleValue,
@@ -398,6 +461,10 @@ DispatchQueue.global().async {
     DispatchQueue.main.async { handle(line) }
   }
   DispatchQueue.main.async {
+    // The app connection is gone. Drop overview ownership first: close only when a
+    // fresh read shows an overview we opened, never toggle on an unknown tree, and
+    // leave remote input held unless that read is already a hidden confirmation.
+    SpaceOverview.shared.shutdown()
     Capture.shared.stopCapture(side: nil, offset: nil) // also shows the pointer again
     injector.releaseAll()
     virtualDisplay.destroy()
@@ -405,8 +472,10 @@ DispatchQueue.global().async {
   }
 }
 
-// Killed or hung up: never leave the pointer hidden or frozen. (A crash ends our WindowServer
-// connection, which shows the pointer and frees it by itself; main's helper.on('exit') goes home.)
+// Killed or hung up: never leave the pointer hidden or frozen. A signal has no fresh
+// accessibility read, so it does not toggle Mission Control; an unknown tree stays
+// untouched. (A crash ends our WindowServer connection, which shows the pointer and
+// frees it by itself; main's helper.on('exit') goes home.)
 for sig in [SIGTERM, SIGINT, SIGHUP] {
   signal(sig) { _ in
     CGAssociateMouseAndMouseCursorPosition(1)

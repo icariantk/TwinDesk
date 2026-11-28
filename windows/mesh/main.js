@@ -4,6 +4,7 @@
 // window, as ../main.js, over the mesh (hub.js) instead of one peer. When a fix in ../main.js applies
 // here too, make it in both.
 const { lanType } = require('../../shared/lantype.js'); // Wi-Fi or Ethernet for Overview (#140)
+const FolderMenu = require('../../shared/foldermenu.js'); // the file manager's Share this folder
 const { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, Notification, shell, globalShortcut, systemPreferences } = require('electron');
 const { Updates } = require('../../shared/updates.js');
 const { aboutInfo } = require('../../shared/about.js');
@@ -100,6 +101,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', (_e, argv) => {
     if (openLink(argv)) return;
     if (sendTo && sendTo.handle(argv)) return; // Explorer › Send to
+    if (shareFolderArg(argv)) return; // Explorer › Share this folder
     if (!openMacAppArg(argv) && !openPhoneAppArg(argv)) showMain();
   });
   app.whenReady().then(start);
@@ -127,6 +129,7 @@ function openLink(argv) {
 }
 
 let explorer = null; // Explorer's right-click › TwinDesk (../explorer.js), for the active phone
+let shellMenu = null; // Windows 11's first-level right-click menu (shellmenu.js)
 let mainWin = null;
 let tray = null;
 let trayKey = '';
@@ -147,6 +150,8 @@ let settings = null;
 let awake = null; // shared/keepawake.js
 let device = null;
 let drive = null; // File Sharing › TwinDesk Drive (shared/drive-host.js createMesh), only once it's on
+let folders = null; // File Sharing › Shared folders and the Share folder sheet (shared/folders-host.js)
+let drop = null; // Drop: one conversation with every device (shared/drop-host.js)
 let web = null; // TwinDesk Web (../web.js), beside the mesh as in the one-to-one app
 let screen = null;
 let viewers = null; // Monitor 2 per device (shared/screen-viewers.js, #256)
@@ -174,6 +179,7 @@ let sendTo = null;
 let pairSync = null;
 let consent = null; // each device's own two-way switches (shared/consent.js)
 let edges = null; // the whole mesh's (shared/mesh-edges.js): the matrix
+let manage = null; // the phones' mesh manager (shared/mesh-manage.js)
 let fileRecv = null;
 let notifs = null;
 let historyKeeper = null; // Clipboard and Notifications › History: kept encrypted when asked (shared/histkeeper.js)
@@ -367,19 +373,29 @@ function start() {
   // or windows from the selected device while Monitor 2 showed another were the wrong device's.
   apps = new Apps({ link: screenLink, allowed: () => consent.get(screenLink.id, 'apps', 'in'), getLanguage: () => i18n.locale, getMonitor: () => screen.win, popup: (kind, text) => hud && hud.show(kind, text), peerName: () => { const x = screenLink.id && hub.sessions.get(screenLink.id); return x ? x.displayName() : peerName(); }, onChange: pushState, onWatch: () => screen.policy() });
   screen.apps = apps;
-  sound = new SoundSet({ Sound, hub, settings, onChange: pushState }); // a Sound per device, both ways at once (shared/sound-mesh.js)
+  sound = new SoundSet({ Sound, hub, settings, save: saveSettings, onChange: pushState }); // a Sound per device, both ways at once (shared/sound-mesh.js)
   loadMic();
   smb = new SmbSet({ Smb, hub, settings, save: saveSettings, onChange: pushState }); // a folder per device, ours to all (shared/smb-mesh.js)
   helper = new Helper();
+  require('../syscapture').useHelper(helper); // Send sound: this PC's sound without TwinDesk's own (no loop both ways)
   require('../../shared/web/pcmedia.js').PcMedia.useHelper((cmd, args) => helper.request(cmd, args, 8000)); // what plays, without PowerShell
   if (require('../../shared/edition.js').fullKvm()) require('../fullkvm/manager.js').attach({ helper }); // the Full KVM build: its tab and service (docs/full-kvm.md)
   clip.useHelper(helper); // its "clipboard" event: something was copied (a picture after a picture too)
   // Files from every device, each on its own link: the computer driving this one isn't selected here
   // (shared/files-mesh.js). fileRecv and dragRecv are the set's single-receiver API.
+  // A phone's Send to another computer of the mesh: taken here and passed on (shared/files-relay.js).
+  const filesRelay = require('../../shared/files-relay.js').filesRelay({
+    selfId: device.id,
+    isPhone: (pid) => { const x = hub.sessions.get(pid); return !!x && P.isPhoneOs(x.peerOs); },
+    connected: (pid) => { const x = hub.sessions.get(pid); return !!x && x.connected; },
+    sendTo: (pid, paths) => { const u = fileDrop && fileDrop.unit(pid); if (!u) return false; u.send(paths); return true; },
+    nameOf: (pid) => { const x = hub.sessions.get(pid); return x ? x.displayName() : pid; },
+    notify: (key, vars) => hud.show('driven', { key: key.replace('file(s)', vars.count === 1 ? 'file' : 'files'), vars }),
+  });
   const files = new FilesSet({
     hub, partner: () => (kvm && kvm.mode === 'driven' ? kvm.partner : null),
     make: (scoped) => ({
-      fileRecv: new FileRecv({ link: scoped, helper, settings, accepts: () => consent.get(scoped.id, 'files', 'in'), onChange: pushState }),
+      fileRecv: new FileRecv({ link: scoped, helper, settings, accepts: () => consent.get(scoped.id, 'files', 'in'), onChange: pushState, relayDir: (to, batch) => filesRelay.dir(scoped.id, to, batch) }),
       dragRecv: new DragRecv({ link: scoped, helper, settings, accepts: () => consent.get(scoped.id, 'files', 'in'), isDriven: () => kvm && kvm.mode === 'driven', onChange: pushState }),
     }),
   });
@@ -477,6 +493,8 @@ function start() {
   kvm.fileClip = fileClip; // Our copy/paste shortcut while driving → fclip.key
   fileClip.kvm = kvm; // …also when the keyboard isn't shared
   sendTo = new SendTo({ link, bus: hub.bus, nameOf: (pid) => { const x = hub.sessions.get(pid); return x ? x.displayName() : ''; }, fileDrop, peerName: () => (peerView() || {}).name || '', popup: (kind, text, sub) => hud.show(kind, text, sub) });
+  shellMenu = new (require('../shellmenu').ShellMenu)({ t, markFile: path.join(app.getPath('userData'), 'shellmenu.json') });
+  shellMenu.start();
   // Copy/paste and Send files show progress in the popup, like a drag. Receiving: every
   // batch that takes longer than a moment; sending: batches over 5 MB.
   const pct = (n, total) => Math.min(99, Math.floor((n / total) * 100));
@@ -533,6 +551,7 @@ function start() {
     for (const tag of ['recv', 'send']) if (!liveFor[tag] || liveFor[tag] === id) liveDone(tag, t('Files stopped'), t('{name} disconnected', { name }));
   });
   fileRecv.onBatch = (b) => {
+    if (filesRelay.done(b)) return; // a phone's batch for another device: passed on
     liveDone('recv', b.files ? t(b.files === 1 ? 'Received {count} file' : 'Received {count} files', { count: b.files }) : t('Nothing arrived'), b.files ? t('From {name}', { name: fromName(b) }) : '');
     if (rezume && rezume.received(b)) return; // a document taken here with ReZume: it opens
     if (b.kind === 'paste') fileClip.pasted(b);
@@ -617,9 +636,18 @@ function start() {
   historyKeeper = new (require('../../shared/histkeeper.js').HistoryKeeper)({ dir: app.getPath('userData'), clip, notifs, changed: pushState });
   loadCamera(); // only while it's on
   loadReZume(); // only while it's on
-  if (settings.drive.on) loadDrive();
+  if (settings.drive.on || (settings.drive.folders || []).length) loadDrive(); // Drive, or shared folders
+  // Shared folders (shared/folders-host.js): the File Sharing card, and the sheet the file manager's Share folder opens.
+  folders = require('../../shared/folders-host.js').foldersHost({
+    settings: () => settings, save: saveSettings, push: pushState, getDrive: () => drive, folders: () => folders, loadDrive,
+    phoneShare: () => { const h = phoneHub || (phoneLink ? loadHub() : null); return h && h.share; },
+    devices: () => (hub ? hub.peers({ indirect: true }) : []).map((d) => ({ id: d.id, name: d.name, os: d.os, connected: d.state === 'connected' })),
+    pick: async () => { const r = await require('electron').dialog.showOpenDialog(mainWin, { properties: ['openDirectory', 'createDirectory'] }); return r.canceled ? '' : r.filePaths[0] || ''; },
+    show: () => goTab('files'),
+    open: (f) => require('electron').shell.openPath(f),
+  });
   const ipc = setupIpc({ dbg: () => dbg, loadDrive, getDrive: () => drive, history: (r) => historyKeeper && historyKeeper.act(r), clearFiles: () => { fileDrop.last = null; if (fileRecv) fileRecv.last = null; if (kvm && kvm.dragRecv) kvm.dragRecv.last = null; pushState(); }, // Files › Recent › Clear: only the list
-    devctl: () => devctl, chats: () => chats, consent: () => consent, viewers: () => viewers, qrPair: qrPairView, adbQr: adbQrDo, explorer: () => explorer, hub, link, discovery, screen, clip, kvm, layoutSync, terminal, sshd, fileDrop, smb, apps, sound, pcScreen, pcApps, peerApps, vdd, notifs, fileClip, wake, updates, settings, save: saveSettings, push: pushState, buildState,
+    devctl: () => devctl, chats: () => chats, consent: () => consent, edges: () => edges, manage: () => manage, viewers: () => viewers, qrPair: qrPairView, adbQr: adbQrDo, explorer: () => explorer, hub, link, discovery, screen, clip, kvm, layoutSync, terminal, sshd, fileDrop, smb, apps, sound, pcScreen, pcApps, peerApps, vdd, notifs, fileClip, wake, updates, settings, save: saveSettings, push: pushState, buildState,
     get phone() { return phone; }, get phoneViews() { return phone ? phone.views : null; }, get camShare() { return camShare; }, iosSign: () => iosSign, deck: () => loadDeck(), get phoneRemote() { return phoneRemote && phoneRemote.loaded ? phoneRemote : null; }, loadRemote, get rezume() { return rezume; }, loadReZume, rezumeWith: (id) => rzSolo && rzSolo.choose(id), get vcam() { return vcam; }, setCamera, get phoneDrive() { return phoneDrive; }, get nowPlaying() { return nowPlaying; }, get btAudio() { return btAudio; }, loadNowPlaying: () => nowPlaying, loadBtAudio, connectPhoneDev, cancelPhoneInvite, phoneHub: loadHub, loadMic,
     get net() { return net; }, applyNet, joinHotspot, applyMesh: () => autoJoin && autoJoin.schedule(),
     checkFirewall, fixFirewall, setStartup, onApp: () => { updateTray(); applyLocalApi(); if (awake) awake.update(); }, onLanguage: changeLanguage, onLook: () => Look.applyTheme(nativeTheme, settings.ui.theme) });
@@ -648,6 +676,14 @@ function start() {
     os: (pid) => (pid === device.id ? P.OS.WIN : ((hub.peers({ indirect: true }).find((x) => x.id === pid) || {}).os || '')),
     connected: (pid) => { const x = hub.sessions.get(pid); return !!x && x.connected; },
   });
+  // The phones' mesh manager (shared/mesh-manage.js): a phone on any computer of the mesh wakes, locks,
+  // restarts… this one, answers its pairings and arranges the layout; Multi-device › Phones may refuse.
+  // Drop (shared/drop.js): one conversation with every TwinDesk device, through this app's links.
+  drop = require('../../shared/drop-host.js').start({ selfId: device.id, name: () => device.name, os: P.OS.WIN, settings: () => settings, save: saveSettings, push: pushState, hub }, () => mainWin);
+  manage = require('../../shared/mesh-manage.js').onHub({
+    hub, mesh, selfId: device.id, name: () => device.name, os: P.OS.WIN, settings: () => settings, save: saveSettings,
+    devLocal: devctl.local, wake: () => wake, layout: () => layoutSync, onChange: pushState,
+  });
   nativeTheme.on('updated', () => { checkTaskbar(); pushState(); });
   link.start();
 
@@ -659,7 +695,7 @@ function start() {
   });
   createTray();
   createMainWindow();
-  if (!openLink(process.argv) && !sendTo.handle(process.argv) && !openMacAppArg(process.argv)) openPhoneAppArg(process.argv);
+  if (!openLink(process.argv) && !sendTo.handle(process.argv) && !shareFolderArg(process.argv) && !openMacAppArg(process.argv)) openPhoneAppArg(process.argv);
   setTimeout(checkFirewall, 3000);
   if (process.argv.includes('--test-monitor')) screen.open(true); // dev: ?test=1 pattern
 }
@@ -855,12 +891,24 @@ let phoneLink = null; // phone-link.js, the phone's session (startPhone)
 let callwin = null;
 function setupHub(pl) {
   phoneLink = pl;
-  const anyOn = () => settings.hub.calls || settings.hub.messages || settings.hub.media || settings.hub.files || settings.hub.shareServe || settings.hub.tether;
+  const anyOn = () => settings.hub.calls || settings.hub.messages || settings.hub.media || settings.hub.files || settings.hub.shareServe || settings.hub.tether || !!(settings.drive.folders || []).length; // shared folders: the phone's are served
   pl.on('client', (ctx) => P.isPhoneOs(ctx.os) && !phoneHub && anyOn() && loadHub());
   // The phone shares a folder: loaded for it (its listener comes with it, so this one passes it on).
   pl.on(`t:${P.T.SHARE_OFFER}`, (m, ctx) => ctx && P.isPhoneOs(ctx.os) && !phoneHub && loadHub().share && phoneHub.share.onOffer(m));
   pl.on(`t:${P.T.SHARE_SET}`, (m, ctx) => ctx && P.isPhoneOs(ctx.os) && !phoneHub && loadHub().share && phoneHub.share.act('serve', { on: !!m.serve }));
   pl.on('t:tether.state', (m, ctx) => ctx && ctx.os === P.OS.ANDROID && m.can === true && !phoneHub && loadHub().tether && phoneHub.tether._state(m)); // a phone that can take Internet over USB (shared/tether.js)
+}
+
+// Share this folder from the file manager's menu (shared/foldermenu.js): `--td share <folder>`.
+function shareFolderArg(argv) {
+  const dir = FolderMenu.fromArgv(argv);
+  if (dir === null) return false;
+  if (dir && settings) shareFolder(dir);
+  return true;
+}
+
+function shareFolder(dir) {
+  if (folders) folders.ask(dir); // the sheet: which devices (shared/folders-host.js)
 }
 
 function loadHub() {
@@ -1202,8 +1250,10 @@ function pushState() {
       if (fileClip) fileClip.syncConnected(kvm.hub.bus.connectedIds().length > 0); // the file shortcuts too
       if (pcScreen) pcScreen.sendState(); // The viewer learns what we share
       if (sendTo) sendTo.sync(hub.peers().filter((x) => !P.isPhoneOs(x.os))); // one Send to entry per paired computer
+      if (shellMenu) shellMenu.devices(hub.peers().filter((x) => !P.isPhoneOs(x.os)));
       if (pairSync) pairSync.check(); // Tell the other computer what changed here
       if (edges) edges.tick(); // the matrix: ours to every device when it changed
+      if (manage) manage.tick(); // the mesh manager: what this computer can do, to every device
       // A pairing code to compare: bring the window to the front.
       const phase = s.pairing ? s.pairing.phase : null;
       if (phase === 'code' && lastPairPhase !== 'code') showMain();
@@ -1358,6 +1408,7 @@ function buildState() {
     // Every paired device (connected or not), and the mesh's selection and live links.
     peers: hub.peers({ indirect: true }),
     matrix: edges ? edges.view() : null, // the Multi-device tab's matrix (shared/mesh-edges.js)
+    manage: manage ? manage.pageView() : null, // Multi-device › Phones (shared/mesh-manage.js)
     mesh: { selectedId: hub.selectedId, connectedIds: hub.bus.connectedIds(), autoJoin: settings.mesh.autoJoin !== false, shareLogs: settings.mesh.shareLogs !== false, collectLogs: settings.mesh.collectLogs !== false },
     debug: dbg ? dbg.view() : null, // Debug tab (shared/debug-start.js)
     localApi: localApi ? localApi.view() : null, // General › Local API
@@ -1411,6 +1462,8 @@ function buildState() {
     peerCtl: devctl && !selectedIsPhone() ? devctl.view : null, // a computer's controls on Overview
     mount: { ...(phoneDrive ? phoneDrive.view : {}), on: settings.mount.on },
     drive: drive ? drive.view() : { on: false, folder: settings.drive.folder || path.join(os.homedir(), 'TwinDesk Drive'), custom: !!settings.drive.folder }, // File Sharing › TwinDesk Drive
+    folders: folders ? folders.view() : null, // File Sharing › Shared folders, and the Share folder sheet
+    drop: drop ? drop.state() : null, // Drop (shared/drop-host.js): the page asks for the room when rev changes
     // Calls, Messages and Photos: the settings alone until the hub is loaded (setupHub).
     hub: phoneHub ? phoneHub.view : { ...settings.hub, connected: false },
     net: { ...(net ? net.view : {}), ...hotspotView(), location: !!wifi && wifi.refusedLocation, ble: settings.net.ble, blePc: settings.net.blePc, bleWifiOff: settings.net.bleWifiOff, bleOff, radio: bleHost ? bleHost.state : bleGuest ? bleGuest.state : 'off', transport: link.current ? link.current.transport : '', lan: lanType(link.current && link.current.address), tailscale: settings.net.tailscale !== false, tailnet: require('../../shared/tailnet.js').mine(), bleInput: settings.net.bleInput === true },
@@ -1776,6 +1829,7 @@ function loadMic() {
 }
 
 app.on('before-quit', () => {
+  require('../syscapture').shutdown(); // a speaker mute it made, given back
   if (web) web.shutdown();
   if (mic) mic.shutdown();
   quitting = true;

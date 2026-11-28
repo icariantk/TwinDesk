@@ -177,6 +177,7 @@ class Link {
 
   // Stop for good: no socket, no reconnect (the mesh manager closes its links this way).
   destroy() {
+    if (this.destroyed) return;
     this.destroyed = true;
     if (this.ilLane) this.ilLane.close();
     clearTimeout(this.timers.reconnect);
@@ -383,7 +384,7 @@ class Link {
         return this._changed();
     }
     if (!this.authed) return;
-    if (this.onAny) return this.onAny(msg);
+    if (this.onAny) return this.onAny(msg, ws);
     const fns = this.handlers.get(msg.t);
     if (fns) for (const fn of fns) fn(msg);
     else if (!this.unknown.has(msg.t)) {

@@ -60,6 +60,8 @@ contextBridge.exposeInMainWorld('macshare', {
   setTab: call('setTab'),
   setMulti: call('setMulti'),
   setModules: call('setModules'), // General › Modules
+  drop: call('drop'), // Drop (shared/drop-host.js)
+  soundRoute: call('soundRoute'), soundVolume: call('soundVolume'), // Audio › the mixer
   deckSave: call('deckSave'), deckTry: call('deckTry'), deckApps: call('deckApps'), deckState: call('deckState'), deckObs: call('deckObs'), deckSetObs: call('deckSetObs'), deckRun: call('deckRun'), deckPick: call('deckPick'), // the Deck page
   relaunch: call('relaunch'),
   setAudio: call('setAudio'),
@@ -77,6 +79,8 @@ contextBridge.exposeInMainWorld('macshare', {
   pickDriveFolder: call('pickDriveFolder'),
   resetDriveFolder: call('resetDriveFolder'),
   openDriveFolder: call('openDriveFolder'),
+  folderShare: call('folderShare'), folderSheet: call('folderSheet'), folderAdd: call('folderAdd'), folderRemove: call('folderRemove'), // Shared folders (shared/folders-host.js)
+  folderDevices: call('folderDevices'), folderAccept: call('folderAccept'), folderDecline: call('folderDecline'), folderOpen: call('folderOpen'),
   cancelDrop: call('cancelDrop'),
   pauseSend: call('pauseSend'),
   resumeSend: call('resumeSend'),
