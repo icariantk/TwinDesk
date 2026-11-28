@@ -122,8 +122,16 @@ UI.tab({
       return { pill: 'good', text: I18n.t('Lets this computer in') };
     }
 
+    // Again only when something it shows changed: the state comes many times a second, and a list
+    // made anew each time repaints the window as often.
     function drawDevices(s) {
       const devs = peersOf(s);
+      const key = JSON.stringify([picked, nameOf(me), devs.map((p) => {
+        const h = hellos.get(p.id);
+        return [p.id, p.name, p.os, p.state, p.via, p.connected, p.rtt, stateOf(p), h && h.ok && [h.data.transport, h.data.version, h.data.allowed]];
+      })]);
+      if (devList.dataset.key === key) return;
+      devList.dataset.key = key;
       const rows = devs.map((p) => {
         const st = stateOf(p);
         const h = hellos.get(p.id);

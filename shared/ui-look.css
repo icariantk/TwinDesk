@@ -115,6 +115,3 @@
 .sm-chip { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft, rgba(10, 132, 255, 0.15)); color: var(--accent, #0a84ff); }
 .sm-none { color: var(--muted, #888); font-size: 13px; }
 .sm-grow { flex: 1; }
-
-/* shared/look-early.js: the window isn't the one in front. Animations wait where they are. */
-:root.still *, :root.still *::before, :root.still *::after { animation-play-state: paused !important; }

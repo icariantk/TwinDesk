@@ -317,10 +317,11 @@ Everyone who sent code, reported a problem or tested is thanked under their vers
   computer that came back 3 times within a minute waits until its link stays up before Drive syncs.
   An older TwinDesk on the other side still gets the whole index, as before. A merge that changed
   nothing no longer writes the whole index file again (2.7 MB for 10,000 files).
-- The TwinDesk window no longer repaints 60 times a second while it's open behind other windows:
-  a connected device's breathing dot (and the other endless animations) kept the window and the GPU
-  process busy, about 5% CPU each and 1 MB/s between them. They now wait while another window is
-  in front and go on when you come back to TwinDesk.
+- The TwinDesk window no longer keeps repainting while it's open behind other windows, about 5% CPU
+  each for it and the GPU process. A connected device's breathing dot (and the other endless
+  animations) now wait while another window is in front and go on when you come back; the Debug page
+  draws its device list again only when something on it changed, not on every update (more than 100
+  changes a second); and a hint or note set to the text it already shows is left alone.
 - Phone app windows open and resize to a phone-like size (a multiple of 16, no shape past 22:9):
   some apps, a phone maker's Camera among them, stopped on odd sizes.
 
