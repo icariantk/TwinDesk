@@ -24,11 +24,14 @@
 // parts a little apart, not all at once, and a computer that came back 3 times within a minute waits
 // until its link stayed up for a while before Drive says hello again (a flapping network card).
 //
-// new DriveLink({drive, send, session, peerName, onChange, memory, partGapMs, stableMs})
+// new DriveLink({drive, send, session, peerName, onChange, folder, memory, partGapMs, stableMs})
 //   send(msg); session(): {host, token, address, port?, fp?, transport} or null (an app without fast
 //   files: Drive doesn't run with it); peerName().
-//   memory: kept by the caller for that computer across its sessions ({have, ups}); a link per
-//   session (Multi-device) gets the same one back.
+//   folder: one of Multi-device's extra folders (shared/drive-host.js createMesh): its id goes on every
+//   message (f) and request (&f=), so the other side finds the folder's own link. '' (the main folder):
+//   nothing added, as an older TwinDesk speaks.
+//   memory: kept by the caller for that computer (and folder) across its sessions ({have, ups}); a
+//   link per session gets the same one back.
 'use strict';
 
 const fs = require('fs');
@@ -61,8 +64,10 @@ const same = (a, b) => {
 const plainAddr = (a) => String(a || '').replace(/^::ffff:/, '');
 
 class DriveLink {
-  constructor({ drive, send, session, peerName = () => '', onChange = () => {}, memory = {}, partGapMs = PART_GAP_MS, stableMs = STABLE_MS }) {
-    Object.assign(this, { drive, sendFn: send, session, peerName, onChange, memory, partGapMs, stableMs });
+  constructor({ drive, send, session, peerName = () => '', onChange = () => {}, folder = '', memory = {}, partGapMs = PART_GAP_MS, stableMs = STABLE_MS }) {
+    Object.assign(this, { drive, session, peerName, onChange, memory, partGapMs, stableMs });
+    this.q = folder ? '&f=' + encodeURIComponent(folder) : '';
+    this.sendFn = folder ? (m) => send({ ...m, f: folder }) : send;
     this.theyHello = false;
     this.saidHello = false;
     this.theirHave = null; // their hello's have: where they are in our index
@@ -283,7 +288,7 @@ class DriveLink {
       const tmp = this.drive.tempPath();
       const out = fs.createWriteStream(tmp);
       const fail = () => { out.destroy(); fs.rm(tmp, { force: true }, () => {}); this.drive.release(pull); resolve(false); };
-      const q = `p=${encodeURIComponent(pull.p)}&h=${pull.h}`;
+      const q = `p=${encodeURIComponent(pull.p)}&h=${pull.h}${this.q}`;
       const req = this._request(s, 'GET', PATH + 'f?' + q);
       req.on('response', (res) => {
         if (res.statusCode !== 200) { res.resume(); return fail(); }
@@ -319,7 +324,7 @@ class DriveLink {
     const s = this.session();
     const src = s && !s.host ? await this.drive.open(m.p, String(m.h || '')) : null;
     if (!src) return this.sendFn({ t: T.DRIVE_GONE, id });
-    const q = `id=${id}`;
+    const q = `id=${id}${this.q}`;
     const req = this._request(s, 'PUT', PATH + 'u?' + q, { 'content-length': src.size });
     req.on('error', () => {});
     req.on('response', (res) => res.resume());

@@ -102,12 +102,15 @@ UI.tab({
     // A paired phone that dropped and may come back by itself (shared/reclaim.js): Disconnect stops it.
     const returnRow = UI.row('', t('Reconnecting…'), [UI.button(t('Disconnect'), () => api.disconnectPhone(), 'small')], { literal: true });
     const returnCard = UI.card('', [returnRow]);
+    const doctor = UI.connectionDoctor ? UI.connectionDoctor('linux') : null;
+
     body.append(
       ...(airplay ? [airplay.el] : []),
       UI.card('', [addrRow, ipRow]),
       UI.card(t('Found nearby'), [discRow, foundList, ...bleRows], { actions: [refresh] }),
       ...(qrPair ? [qrPair.el] : []),
       hero,
+      ...(doctor ? [doctor.el] : []),
       returnCard,
       adb.el,
       ...(tether ? [tether.el] : []),
@@ -169,6 +172,7 @@ UI.tab({
       return { busy: true, text: mine.kind === 'take' ? t('Taking over…') : t('Connecting…') };
     }
     const update = (s) => {
+      if (doctor) doctor.update(s);
       const returning = s.phone && s.phone.returning;
       returnCard.hidden = !returning;
       if (returning) returnRow.label.textContent = returning.name;
@@ -187,7 +191,7 @@ UI.tab({
       else peerDev.style.removeProperty('--phone-wall');
       linkLine.className = 'hero-link' + (connected ? ' up' : '');
       const ble = s.net && s.net.transport === 'ble';
-      linkText.textContent = connected ? (l.rtt != null ? l.rtt + ' ms · ' : '') + UI.via(s)
+      linkText.textContent = connected ? (l.rtt != null ? l.rtt + ' ms, ' : '') + UI.via(s)
         : s.pairing ? t('Pairing…') : s.paired ? t('Connecting…') : t('Not connected');
       const bad = l.state === 'identity_changed';
       status.textContent = bad ? t('This {kind} looks different now. Forget it and pair again.', { kind: t(p.kind) })

@@ -6,7 +6,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const ACTIONS = [
   'setSharing', 'setStreamInput', 'selectDisplay', 'setDisplayMode', 'setVirtual', 'setStreamMaxHeight',
-  'setBitrate', 'setKvm', 'setPortals', 'moveKvm', 'identifyDisplays', 'setApp', 'setAudio', 'camera', 'phoneMedia', 'phoneBtPick', 'setTerminal', 'setRemote', 'setRezume', 'rezumeDo', 'openSharingSettings', 'setFiles', 'setDrive', 'pickDriveFolder', 'resetDriveFolder', 'openDriveFolder', 'pickDropFolder', 'resetDropFolder', 'revealDrop', 'clearFiles', 'cancelSend', 'setSmb', 'setShareMac', 'chooseShareFolder', 'stopSharingFolder', 'openPcShare', 'setApps', 'setReceive', 'showPcView', 'closePcView', 'setPcApps', 'listPcApps', 'openPcApp', 'openPcShell', 'setScreenSound', 'setKeys', 'setClipboard', 'copyHistory', 'clearHistory', 'history', 'setTab', 'setLanguage', 'setLook', 'setSharingOpts', 'remoteScreen', 'wakePeer', 'setWakeOnLan',
+  'setBitrate', 'setKvm', 'setPortals', 'moveKvm', 'identifyDisplays', 'setApp', 'setAudio', 'camera', 'phoneMedia', 'phoneBtPick', 'setTerminal', 'setRemote', 'setRezume', 'rezumeDo', 'openSharingSettings', 'setFiles', 'setDrive', 'pickDriveFolder', 'resetDriveFolder', 'openDriveFolder', 'folderShare', 'folderSheet', 'folderAdd', 'folderRemove', 'folderDevices', 'folderAccept', 'folderDecline', 'folderOpen', 'pickDropFolder', 'resetDropFolder', 'revealDrop', 'clearFiles', 'cancelSend', 'setSmb', 'setShareMac', 'chooseShareFolder', 'stopSharingFolder', 'openPcShare', 'setApps', 'setReceive', 'showPcView', 'closePcView', 'setPcApps', 'listPcApps', 'openPcApp', 'openPcShell', 'setScreenSound', 'setKeys', 'setClipboard', 'copyHistory', 'clearHistory', 'history', 'setTab', 'setLanguage', 'setLook', 'setSharingOpts', 'remoteScreen', 'wakePeer', 'setWakeOnLan',
   'pairRespond', 'forget', 'openSettings', 'relaunch', 'setMulti', 'setModules', 'deckSave', 'deckTry',
   'keepPcAppInDock', 'sendFiles', 'chooseSendFiles', 'setNotifs', 'muteNotifApp', 'allowFullDisk',
   'connectAddress', 'pairWith', 'confirmGuestCode', 'cancelGuestPair', 'forgetHost', 'refreshDiscovery', 'copyText', 'allowPermission', 'skipSetup',
@@ -21,6 +21,7 @@ const api = {
   getState: () => ipcRenderer.invoke('getState'),
   phoneAssets: () => ipcRenderer.invoke('phoneAssets'),
   deckApps: () => ipcRenderer.invoke('deckApps'), // the Deck page's app picker
+  soundRoute: (o) => ipcRenderer.invoke('soundRoute', o), soundVolume: (level) => ipcRenderer.invoke('soundVolume', level), // Audio › the mixer
   deckState: (obs) => ipcRenderer.invoke('deckState', obs === true || obs === 'mix' ? obs : false), // its sound, Bluetooth and display pickers (OBS's: obs)
   deckObs: () => ipcRenderer.invoke('deckObs'), // OBS Studio's port, and whether a password is kept
   deckSetObs: (v) => ipcRenderer.invoke('deckSetObs', v), // {port, pass} → OBS's state
@@ -34,7 +35,8 @@ const api = {
   pathsOf: (files) => [...files].map((f) => webUtils.getPathForFile(f)).filter(Boolean), // dropped files -> paths
 };
 for (const name of ACTIONS) api[name] = (arg) => ipcRenderer.send(name, arg);
-api.qrPair = () => ipcRenderer.invoke('qrPair'); // Connection: pair a phone with a QR code (its link)
+api.qrPair = () => ipcRenderer.invoke('qrPair');
+api.drop = (o) => ipcRenderer.invoke('drop', o); // Drop (shared/drop-host.js) // Connection: pair a phone with a QR code (its link)
 api.setReZume = api.setRezume; // the shared ReZume page (shared/ui-rezume.js) says it the PC's way
 // The one action with two arguments (Camera › Start and Window: {facing, show}): sent as one.
 api.phoneCamera = (open, opts) => ipcRenderer.send('phoneCamera', { open, opts });

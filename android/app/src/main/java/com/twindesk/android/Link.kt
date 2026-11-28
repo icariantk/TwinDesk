@@ -49,7 +49,7 @@ class Link(
     interface Events {
         fun onChange()
         fun onWelcome(host: Host)
-        fun onMessage(m: JSONObject)
+        fun onMessage(m: JSONObject, route: TrustedRoute?, source: WebSocket)
         fun onClosed(host: Host, code: String?)
     }
 
@@ -65,9 +65,14 @@ class Link(
     // resume onto the network (Core), false again, with the Bluetooth socket kept as the fallback.
     @Volatile var ble = false; private set
     val connected get() = state == "connected"
+    private val connectionObservations = ConnectionObservations()
+
+    internal fun doctorClose(h: Host): ConnectionCloseObservation? =
+        if (store.hosts(hostsKey).any { it.id == h.id && it.fp == h.fp })
+            connectionObservations.forPair(h.id, h.fp) else null
 
     private val exec = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "td-link").apply { isDaemon = true } }
-    private var ws: WebSocket? = null
+    @Volatile private var ws: WebSocket? = null
     private var mode = "" // session | pair
     private var nw = ""
     private var pairNonce = "" // pairing through the cable: the nonce the computer sent us over adb
@@ -166,6 +171,7 @@ class Link(
         dialAdmit = if (wantReclaim) admit else null
         reclaimHello = wantReclaim
         pair = null
+        connectionObservations.select(h.id, h.fp)
         host = h
         wired = viaUsb
         ble = viaBle
@@ -191,7 +197,10 @@ class Link(
     fun disconnect() {
         parting = true
         run {
-            if (state == "connected" || helloSent) raw(msg(Proto.T.BYE))
+            if (state == "connected" || helloSent) {
+                host?.let { connectionObservations.closed(it.id, it.fp, "local", false, System.currentTimeMillis()) }
+                raw(msg(Proto.T.BYE))
+            }
             closeSocket()
             setState("idle", "")
         }
@@ -247,6 +256,37 @@ class Link(
         events.onChange()
     }
 
+    // The socket welcome authenticated, with the pair it authenticated. A later socket is a new one.
+    class TrustedRoute(val marker: Any, val id: String, val fp: String) {
+        internal fun matches(socket: Any, id: String, fp: String): Boolean =
+            marker === socket && this.id == id && this.fp == fp && id.isNotEmpty() && fp.isNotEmpty()
+    }
+
+    private fun trustedRoute(w: WebSocket): TrustedRoute? {
+        if (w !== ws) return null
+        val h = host ?: return null
+        if (parting || state != "connected" || h.id.isEmpty() || h.fp.isEmpty()) return null
+        return TrustedRoute(w, h.id, h.fp)
+    }
+
+    fun accepts(route: TrustedRoute?): Boolean = matches(route) != null
+
+    // Only on the socket that is still this route. A retired socket, or a pair that has since
+    // connected, gets nothing: the caller keeps the bytes for a later consenting socket of this pair.
+    fun sendFor(route: TrustedRoute?, m: JSONObject): Boolean {
+        val w = matches(route) ?: return false
+        if (quietSince != 0L && probeAt == 0L) probeAt = System.currentTimeMillis()
+        return w.send(m.toString())
+    }
+
+    private fun matches(route: TrustedRoute?): WebSocket? {
+        if (parting || route == null) return null
+        val w = ws ?: return null
+        val h = host ?: return null
+        if (state != "connected" || !route.matches(w, h.id, h.fp)) return null
+        return w
+    }
+
     fun send(m: JSONObject): Boolean {
         val w = ws ?: return false
         if (state != "connected") return false
@@ -299,6 +339,17 @@ class Link(
 
     // The session's socket now: its address and port (127.0.0.1 through the cable or Bluetooth).
     fun endpoint(): Pair<String, Int>? = ws?.let { endOf[it] }
+
+    // A deferred viewer request belongs to the socket that delivered its offer.
+    internal fun sendFor(marker: Any?, m: JSONObject): Boolean {
+        val socket = ws ?: return false
+        if (marker == null || socket !== marker || state != "connected" || parting) return false
+        if (quietSince != 0L && probeAt == 0L) probeAt = System.currentTimeMillis()
+        return socket.send(m.toString())
+    }
+
+    internal fun ownsVideoSession(marker: Any?): Boolean =
+        !parting && connected && marker != null && ws === marker
 
     internal fun sessionMarker(): Any? = ws
     // Called synchronously before Core removes durable return intent. An already queued welcome
@@ -436,7 +487,7 @@ class Link(
                 val m = runCatching { JSONObject(text) }.getOrNull()
                 if (m?.optString("t") == Proto.T.WELCOME && m.optBoolean("resumed")) promote(webSocket)
                 else { pending = null; webSocket.cancel() }
-            } else if (webSocket === ws || webSocket === alt) onText(text)
+            } else if (webSocket === ws || webSocket === alt) onText(text, webSocket)
         }
         // The computer closed it (Disconnect, Forget…): answer at once. OkHttp waits for us to,
         // and until then neither side saw the session end.
@@ -488,7 +539,7 @@ class Link(
         helloTimer = exec.schedule({ if (state != "connected") { message = tr("No answer"); ws?.cancel() } }, if (ble) Proto.BLE_TIMEOUT_MS else Proto.TIMEOUT_MS, TimeUnit.MILLISECONDS)
     }
 
-    private fun onText(text: String) {
+    private fun onText(text: String, ingress: WebSocket) {
         val m = runCatching { JSONObject(text) }.getOrNull() ?: return
         val t = m.optString("t")
         lastRx = System.currentTimeMillis()
@@ -502,7 +553,7 @@ class Link(
             Proto.T.PONG -> { if (m.has("ts")) rttMs = maxOf(0, System.currentTimeMillis() - m.optLong("ts")); return }
             QUIET_IDLE -> { if (state == "connected") { val was = peerIdle; peerIdle = m.optBoolean("on"); if (was != peerIdle) nudge() }; return }
         }
-        if (state == "connected") events.onMessage(m)
+        if (state == "connected") events.onMessage(m, trustedRoute(ingress), ingress)
     }
 
     private fun onNonce(m: JSONObject) {
@@ -719,6 +770,7 @@ class Link(
             return
         }
         val was = state
+        host?.let { connectionObservations.closed(it.id, it.fp, lastCode, failure == "identity", System.currentTimeMillis()) }
         if (failure == "identity" && !wasReclaim) {
             setState("failed", tr("{name} looks different now. Forget it and pair again.", "name" to (host?.name ?: tr("The computer"))))
         } else if (failure == "identity") {

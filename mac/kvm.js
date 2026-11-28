@@ -115,6 +115,8 @@ class Kvm extends EventEmitter {
     // host tells it so both computers agree; after that kvm.link keeps them in step.
     server.on('client', (ctx) => {
       this.lastName = ctx.name;
+      // So a session that is "connected but the keyboard is dead" can be told from a healthy one in the log (#337).
+      console.log(`[kvm] ${ctx.name} connected: ${this.mode}, cursor sharing ${this.linked ? 'on' : 'off'}${this.locked ? ', locked' : ''}`);
       this.map.reset();
       this.map.sendDisplays();
       const by = this.cfg.linkedBy || {};
@@ -229,7 +231,9 @@ class Kvm extends EventEmitter {
   }
 
   get portalRules() {
-    const id = this.server.current && this.server.current.deviceId;
+    const cur = this.server.current;
+    const id = cur && cur.deviceId;
+    if (!this.cfg.portalsOn || !cur || P.isPhoneOs(cur.os)) return []; // off, or a phone: no portals
     const byPeer = this.cfg.portalsByPeer || {};
     return id && byPeer[id] !== undefined ? Portals.normalize(byPeer[id]) : [];
   }
@@ -248,7 +252,17 @@ class Kvm extends EventEmitter {
 
   get view() {
     return { where: this.mode, message: this.message, tapError: this.tapError, paused: this.paused, locked: this.locked, map: this.map.view,
-      portals: { supported: this.helperPortalVersion === PORTAL_VERSION && this.map.peerPortalVersion === PORTAL_VERSION, rules: this.portalRules } };
+      portals: this.portalView() };
+  }
+
+  // The Cursor portals card (ui-cursor-portals.js): the same shape as Multi-device's, with the one peer.
+  portalView() {
+    const cur = this.server.current;
+    const byPeer = this.cfg.portalsByPeer || {};
+    const peer = cur && cur.deviceId && !P.isPhoneOs(cur.os) ? cur : null;
+    return { supported: this.helperPortalVersion === PORTAL_VERSION && this.map.peerPortalVersion === PORTAL_VERSION, on: !!this.cfg.portalsOn,
+      mine: this.map.mine, rules: this.portalRules,
+      peers: peer ? [{ id: peer.deviceId, name: peer.name, os: peer.os, displays: this.map.theirs, rules: (byPeer[peer.deviceId] !== undefined && Portals.normalize(byPeer[peer.deviceId])) || [] }] : [] };
   }
 
   // Cursor lock: at home the edge doesn't cross, driven the way back isn't watched, driving the
@@ -292,7 +306,7 @@ class Kvm extends EventEmitter {
     this.helper
       .request('kvmConfig', {
         side: k.pcSide, resistancePx: k.resistancePx, keyboard: !!k.keyboard,
-        crossingModifier: k.crossingModifier || '',
+        crossingModifier: k.portalsOn ? '' : k.crossingModifier || '', // portals have their own keys
         driveOther: !!(portalsReady && this.linked && k.driveOther && k.mouse && this.server.current && this.server.current.os !== P.OS.IOS && !this.paused && !(this.locked && this.mode === 'home')),
         hotkey: this.getSettings().keys.hotkey || P.HOTKEY_MAC,
         emergencyKeys: require('./emergency-shortcut').valid(this.getSettings().keys.emergencyKeys),

@@ -284,7 +284,7 @@ class PcScreen {
     this._stopSend(true);
     const mbps = this.cfg.mbps; // Share screen › Quality, for phones too
     const native = NativeScreen.mode() !== 'chromium' ? { captureRect: rect, captureWidth: rect.width, captureHeight: rect.height } : {};
-    const session = this.sender.start({ sourceId: src.id, ...native, width, height, mbps, fps, steady, audio: this.cfg.sound, offer: { kind: 'screen', width, height } }); // its size: a viewer shapes its window to it (#255)
+    const session = this.sender.start({ sourceId: src.id, ...native, detailSource: { width: rect.width, height: rect.height }, width, height, mbps, fps, steady, audio: this.cfg.sound, offer: { kind: 'screen', width, height } }); // its size: a viewer shapes its window to it (#255)
     this.sending = { session, displayId: d.id, rect, key };
     this.stats = null;
     Object.assign(this.status, { status: 'starting', error: '', name: d.label || src.name, width: rect.width, height: rect.height });
@@ -309,7 +309,7 @@ class PcScreen {
   // screen.state after welcome and whenever any of it changes (called with every state push).
   sendState() {
     if (this.link.status.state !== 'connected') return void (this.stateKey = '');
-    const msg = { t: T.SCREEN_STATE, on: this.mode !== 'off', mode: this.mode, remote: this.cfg.remote, modes: this._modes(), touch: true };
+    const msg = { t: T.SCREEN_STATE, on: this.mode !== 'off', mode: this.mode, remote: this.cfg.remote, input: !!this.input.allowed, modes: this._modes(), touch: true };
     const key = JSON.stringify(msg);
     if (key === this.stateKey) return;
     this.stateKey = key;

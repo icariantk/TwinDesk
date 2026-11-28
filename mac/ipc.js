@@ -39,12 +39,12 @@ const SCHEMA = {
   virtual: { enabled: bool, width: (v) => Math.round(clamp(640, 3840, 1920)(v)), height: (v) => Math.round(clamp(480, 2160, 1080)(v)), hiDPI: bool, hz: oneOf([30, 60], 60) },
   kvm: {
     pcSide: oneOf(P.SIDES, 'right'), mouse: bool, keyboard: bool, driveOther: bool, beDriven: bool,
-    resistancePx: (v) => Math.round(clamp(0, 400, 120)(v)), crossingModifier: oneOf(['', 'Command', 'Control', 'Alt', 'Shift'], ''), speed: clamp(0.25, 4, 1), scrollSpeed: clamp(0.25, 4, 1), reverseScroll: bool, hotkeySwitch: bool, linked: bool, gestures: bool, ble: bool, syncPads: bool, shakeHome: bool,
+    resistancePx: (v) => Math.round(clamp(0, 400, 120)(v)), crossingModifier: oneOf(['', 'Command', 'Control', 'Alt', 'Shift'], ''), speed: clamp(0.25, 4, 1), scrollSpeed: clamp(0.25, 4, 1), reverseScroll: bool, hotkeySwitch: bool, linked: bool, gestures: bool, ble: bool, syncPads: bool, shakeHome: bool, portalsOn: bool,
   },
   keys: { swapCtrlCmd: bool, hotkey: oneOf(P.HOTKEYS, 'AltRight'), lockKeys: (v) => CL.validKeys(v, CL.DEFAULT_KEYS.mac), emergencyKeys: emergencyShortcut.valid },
   app: { openAtLogin: bool, keepAwake: bool, hud: bool, inputProtocol: oneOf(['udp', 'tcp'], 'udp'), keepPinging: bool, localApi: bool, lockTogether: bool },
   updates: { auto: bool, skipped: (v) => (typeof v === 'string' ? v.slice(0, 40) : ''), install: bool },
-  audio: { send: bool, receive: bool, muteLocal: bool, engine: oneOf(['helper', 'system'], 'helper'), volume: clamp(0, 1, 1), phoneMedia: bool, micSend: bool, micReceive: bool, micDevice: devId, micOut: devId }, // mic*: shared/mic.js
+  audio: { send: bool, receive: bool, muteLocal: bool, engine: oneOf(['helper', 'system'], 'helper'), volume: clamp(0, 1, 1), phoneMedia: bool, micSend: bool, micReceive: bool, micDevice: devId, micOut: devId, routes: (v) => require('../shared/sound-route.js').normRoutes(v), sync: bool }, // mic*: shared/mic.js; routes, sync: the mixer (shared/sound-route.js)
   terminal: { allowPc: bool, connectPc: bool },
   files: { acceptDrops: bool, reveal: bool, dragEdge: bool, outboxHours: oneOf([0, 1, 24, 168], 24), clipReceived: bool, plain: bool, shortcuts: bool, copyKeys: accel('Control+Alt+C'), pasteKeys: accel('Control+Alt+V') },
   notifs: { send: bool, receive: bool, hideText: bool },
@@ -53,7 +53,7 @@ const SCHEMA = {
   receive: { on: bool, fullScreen: bool, input: bool, framegen: bool },
   sharing: { remote: bool, pace: oneOf(['fast', 'smooth', 'steady'], 'fast'), codec: oneOf(['h264', 'h265'], 'h264'), fps: oneOf([0, 30, 60], 0) },
   papps: { on: bool },
-  phone: { sound: bool, bitrateMbps: (v) => Math.round(clamp(2, 40, 8)(v)), maxSize: oneOf([0, 1920, 1600, 1280, 1024], 0), wallpaper: bool, input: oneOf(['adb', 'phone'], 'adb'), inputPicked: bool, mirror: oneOf(['auto', 'adb', 'native'], 'auto'), soundVia: oneOf(['auto', 'adb', 'native'], 'auto'), enterSends: bool, arrowSwipe: bool, hover: bool, uhid: bool, direct: bool, lowLatency: bool },
+  phone: { sound: bool, bitrateMbps: (v) => Math.round(clamp(2, 40, 8)(v)), maxSize: oneOf([0, 1920, 1600, 1280, 1024], 0), wallpaper: bool, input: oneOf(['adb', 'phone'], 'adb'), inputPicked: bool, mirror: oneOf(['auto', 'adb', 'native'], 'auto'), soundVia: oneOf(['auto', 'adb', 'native'], 'auto'), enterSends: bool, arrowSwipe: bool, hover: bool, uhid: bool, direct: bool, lowLatency: bool, keepPanelOff: bool },
   mount: { on: bool },
   clipboard: {
     enabled: bool, send: bool, receive: bool, mode: oneOf(['switch', 'instant'], 'instant'),
@@ -160,6 +160,7 @@ function setupIpc(ctx) {
       if (partial && 'input' in partial) ctx.phone.bridge.tellVia();
       if (partial && ('input' in partial || 'mirror' in partial || 'soundVia' in partial)) ctx.phone.bridge.modesChanged(); // ADB or Native (shared/phonemodes.js)
       if (partial && ('enterSends' in partial || 'arrowSwipe' in partial) && ctx.phoneViews) ctx.phoneViews.applyOpts(); // the open phone windows light their buttons
+      if (partial && 'keepPanelOff' in partial) ctx.phoneViews?.panelPreferenceChanged();
     },
     phonePair(arg) {
       if (arg && typeof arg === 'object') ctx.phone.bridge.pair(arg.code, arg.where);
@@ -302,6 +303,7 @@ function setupIpc(ctx) {
     selectDisplay(displayId) {
       settings.sharing.displayId = displayId == null ? null : Number(displayId);
       save();
+      if (typeof ctx.stream.noteViewIdentity === 'function') ctx.stream.noteViewIdentity();
       ctx.stream.restart('display selected');
     },
     // Extend: Monitor 2 is the TwinDesk virtual display. Mirror: it shows this Mac's main screen.
@@ -316,6 +318,7 @@ function setupIpc(ctx) {
         settings.virtual.enabled = true;
       }
       save();
+      if (typeof ctx.stream.noteViewIdentity === 'function') ctx.stream.noteViewIdentity();
       ctx.displays.applyVirtual().then(() => ctx.stream.restart(`mode ${mode}`));
     },
     setVirtual(partial) {
@@ -338,7 +341,8 @@ function setupIpc(ctx) {
     identifyDisplays() {
       ctx.kvm.map.identify();
     },
-    setPortals(value) {
+    setPortals(arg) { // [rules], or {rules, peer} as the shared editor sends it (the one peer here)
+      const value = Array.isArray(arg) ? arg : arg && arg.rules;
       const peer = ctx.server.current;
       const rules = Portals.normalize(value);
       if (!peer || !rules || ctx.kvm.mode !== 'home') return;
@@ -732,6 +736,7 @@ function setupIpc(ctx) {
       ctx.pairing.respond(!!allow);
     },
     forget(deviceId) {
+      // The device can be a saved host or a paired client.
       if (ctx.link.hosts.some((h) => h.id === String(deviceId))) return ctx.link.forget(String(deviceId));
       ctx.pairing.forget(String(deviceId));
       ctx.terminal.forget(String(deviceId));
@@ -774,6 +779,10 @@ function setupIpc(ctx) {
     return r.canceled || !r.filePaths.length ? '' : r.filePaths[0];
   })(o));
   ipcMain.handle('deckRun', (_e, a) => (ctx.deck && a && typeof a === 'object' ? ctx.deck.exec(a).then(() => ({ ok: true }), (e) => ({ ok: false, why: e.message })) : { ok: false })); // Try
+  // Audio › the mixer (shared/ui-sound-mix.js): a device's speakers for our sound (out) or ours for its (in);
+  // this Mac's own speakers' volume (read with no level).
+  ipcMain.handle('soundRoute', (_e, o) => { if (o && typeof o === 'object' && typeof o.id === 'string' && Array.isArray(o.outs)) ctx.audio.setRoute(o.dir === 'in' ? 'in' : 'out', o.outs); pushState(); });
+  ipcMain.handle('soundVolume', (_e, level) => require('../shared/sound-local.js').volume('darwin', ctx.helper, level).catch(() => ({ volume: null })));
   ipcMain.handle('deckState', (_e, obs) => (ctx.deck ? ctx.deck.state(obs === true, obs === 'mix').catch(() => ({})) : {})); // its sound, Bluetooth and display pickers (OBS's: obs)
   ipcMain.handle('deckObs', () => (ctx.deck ? ctx.deck.obsConfig() : null)); // OBS Studio's port, and whether a password is kept
   ipcMain.handle('deckSetObs', (_e, v) => (ctx.deck && v && typeof v === 'object' ? ctx.deck.setObs(v) : { on: false })); // → OBS's state with them

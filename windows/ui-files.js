@@ -73,11 +73,11 @@ UI.tab({
     window.addEventListener('drop', (e) => e.preventDefault());
 
     // Copy and paste files with shortcuts
-    const keysSw = sw(I18n.t('Copy and paste files with shortcuts'), (v) => api.setFiles({ shortcuts: v }));
+    const keysSw = sw(I18n.t('Copy and paste files'), (v) => api.setFiles({ shortcuts: v }));
     const copyRec = UI.keyRecorder((v) => api.setFiles({ copyKeys: v }));
     const pasteRec = UI.keyRecorder((v) => api.setFiles({ pasteKeys: v }));
     const keysRow = UI.row(I18n.t('Copy and paste files'), '', [keysSw], { literal: true });
-    const copyRow = UI.row(I18n.t('Copy'), I18n.t('Select files in File Explorer first'), [copyRec]);
+    const copyRow = UI.row(I18n.t('Copy'), '', [copyRec]);
     const pasteRow = UI.row(I18n.t('Paste'), '', [pasteRec], { literal: true });
 
     const edgeDrag = sw(I18n.t('Drag files across the screen edge'), (v) => api.setFiles({ edgeDrag: v }));
@@ -85,28 +85,36 @@ UI.tab({
     // Unencrypted file transfers (shared/fastfile.js fxPlain): the switch is on while they're encrypted.
     const encrypt = sw(I18n.t('Encrypt file transfers'), (v) => api.setFiles({ plain: !v }));
     const encryptRow = UI.row(I18n.t('Encrypt file transfers'), '', [encrypt]);
-    const clipSw = sw(I18n.t('Put received files on the clipboard'), (v) => api.setFiles({ clipReceived: v }));
-    const clipRow = UI.row(I18n.t('Put received files on the clipboard'), I18n.t('Files sent here are ready to paste with Ctrl+V'), [clipSw]);
+    const clipSw = sw(I18n.t('Copy received files to clipboard'), (v) => api.setFiles({ clipReceived: v }));
+    const clipRow = UI.row(I18n.t('Copy received files to clipboard'), '', [clipSw]);
     const cancelBtn = UI.button(I18n.t('Cancel'), () => api.cancelDrop(), 'small');
     const outRow = UI.row('', '', [cancelBtn], { literal: true });
     const inRow = UI.row('', '', [], { literal: true });
     // TwinDesk Drive (shared/ui-drive.js): one-to-one and Multi-device alike; hidden where the state has none.
     const drive = UI.driveCard ? UI.driveCard(api, { tilde: (p) => p, manager: 'File Explorer' }) : null;
-    body.append(
-      UI.card('', [sendRow, zone], { cls: 'keep-on' }),
-      UI.card('', [keysRow, copyRow, pasteRow], { cls: 'keep-on' }),
-      pair.el,
-      UI.card('', [edgeRow, encryptRow, clipRow]),
-      ...(outbox ? [outbox.card] : []),
-      ...(drive ? [drive.card] : []),
-      UI.card(I18n.t('Recent'), [outRow, inRow], { actions: [UI.button(I18n.t('Clear'), () => api.clearFiles(), 'small')] }),
-    );
+    // Four tabs listed beside the page: File Sharing, TwinDesk Drive, Shared folders, Settings.
+    const sections = UI.subtabs('files', [
+      { id: 'share', title: I18n.t('File Sharing'), cards: [
+        UI.card(I18n.t('Send'), [sendRow, zone], { cls: 'keep-on' }),
+        UI.titled(I18n.t('Network folders'), pair.el),
+        outbox ? outbox.card : null,
+        UI.card(I18n.t('Recent'), [outRow, inRow], { actions: [UI.button(I18n.t('Clear'), () => api.clearFiles(), 'small')] }),
+      ] },
+      { id: 'drive', title: I18n.t('TwinDesk Drive'), cards: [drive ? drive.card : null] },
+      { id: 'folders', title: I18n.t('Shared folders'), cards: drive ? [drive.folders, drive.invites] : [] },
+      { id: 'settings', title: I18n.t('Settings'), cards: [
+        UI.card(I18n.t('Shortcuts'), [keysRow, copyRow, pasteRow], { cls: 'keep-on' }),
+        UI.card(I18n.t('Transfers'), [edgeRow, encryptRow, clipRow]),
+      ] },
+    ]);
+    body.append(sections);
     const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
     return (s) => {
       const f = s.files;
       const m = f.smb;
       const p = UI.peer(s);
       pair.update(s);
+      sections.spy();
       if (drive) drive.update(s);
       if (outbox) outbox.update(f);
       clipSw.set(!!f.clipReceived);
@@ -163,7 +171,7 @@ UI.tab({
         outRow.setHint(I18n.t('{sent} of {size}{waiting}', { sent: mb(c.sent), size: mb(c.size), waiting: f.queued ? I18n.t(' · {count} more waiting', { count: f.queued }) : '' }));
       } else {
         outRow.label.textContent = f.last ? I18n.t(f.last.ok ? 'Sent {file}' : 'Not sent: {file}', { file: f.last.name || '' }) : I18n.t('Nothing sent');
-        outRow.setHint(f.last ? I18n.t(f.last.text, p) + ' · ' + UI.ago(f.last.at) : '');
+        outRow.setHint(f.last ? I18n.t(f.last.text, p) + ', ' + UI.ago(f.last.at) : '');
       }
       const inc = f.incoming;
       const dr = f.drag;
@@ -174,12 +182,12 @@ UI.tab({
       }
       if (dr.last && (!inc.last || dr.last.at > inc.last.at)) {
         inRow.label.textContent = dr.last.ok ? I18n.t('Received from {name}', { name: p.name }) : I18n.t('Not received');
-        inRow.setHint(I18n.t(dr.last.text, p) + ' · ' + UI.ago(dr.last.at));
+        inRow.setHint(I18n.t(dr.last.text, p) + ', ' + UI.ago(dr.last.at));
         return;
       }
       inRow.label.textContent = inc.receiving ? I18n.t(inc.receiving === 1 ? 'Receiving {count} file from {name}' : 'Receiving {count} files from {name}', { count: inc.receiving, name: p.name })
         : inc.last ? I18n.t(inc.last.ok ? 'Received {file}' : 'Not received: {file}', { file: inc.last.name }) : I18n.t('Nothing received');
-      inRow.setHint(inc.receiving ? '' : inc.last ? I18n.t(inc.last.text, p) + ' · ' + UI.ago(inc.last.at) : '');
+      inRow.setHint(inc.receiving ? '' : inc.last ? I18n.t(inc.last.text, p) + ', ' + UI.ago(inc.last.at) : '');
     };
   },
 });

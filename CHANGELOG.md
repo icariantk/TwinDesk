@@ -12,6 +12,117 @@ Everyone who sent code, reported a problem or tested is thanked under their vers
 ## Next (unreleased)
 
 ### New
+- **Drop** (Share › Drop, Mac, Windows, Linux, Android, iPhone and iPad, one-to-one and Multi-device): one
+  conversation with every TwinDesk device. Send text, links, pictures and files (up to 5 MB) to
+  everyone or to one device. No server: the mesh passes each message on, and each device keeps a
+  history (500 messages on a computer, 300 on a phone). A device that was away catches up when it
+  connects, in the same order everywhere. Delete for me, Delete for everyone (your own messages),
+  Block a device, Clear All, an unread badge, and a notification while TwinDesk isn't in front. Off
+  on a new install: turn it on on each device that takes part. TwinDesk Web keeps its own Drop. Tested with
+  simulated devices; not yet between real ones.
+- **Audio mixer** (Audio, Mac, Windows and Linux, Multi-device and one-to-one): From this computer, tick
+  the computers that play its sound, and on each one the speakers, several at once, with a volume per
+  speaker; To this computer, the same for each computer's sound here. Each computer shows Playing and
+  the delay heard (ms). The receiver keeps the choice, so it stays when either side changes it. A phone
+  keeps the Audio page as before. Untested between devices.
+- **Keep speakers in sync** (Audio, off by default): every computer playing this computer's sound
+  plays it 0.2 s late, so speakers of several computers in one room play together instead of
+  echoing. This computer's own speakers aren't delayed.
+- iPhone and iPad, Overview › Computers: the mesh manager, as on Android. Every computer of the mesh,
+  with Wake, Lock, Unlock, Sleep, Restart and Shut down where it allows them, pairings to answer,
+  Remove from the mesh and the layout under Arrange. Strong actions ask for Face ID first.
+- Multi-device, phone share sheet: Send to TwinDesk asks which computer, the connected one first. The
+  connected computer takes the files and passes them on to the one picked (Android; Mac, Windows, Linux
+  pass them on). With no other computer in the mesh it sends straight away, as before.
+
+- **Shared folders** (File Sharing › Shared folders, separate from TwinDesk Drive): up to 10 folders,
+  each shared with the devices you choose (or All, which includes devices added later), changeable at
+  any time. Stop sharing leaves the files in place. Folders another computer shares with this one
+  appear under Shared with you, to Accept or Decline. Phones need no update: their folders appear in
+  the phone's Files app. Folders shared only with phones don't load the sync engine. One-to-one and
+  Multi-device, on the Mac, Windows and Linux. Tested here; not yet between devices.
+- **File Sharing in four tabs**: File Sharing, TwinDesk Drive, Shared folders and Settings. Shared
+  folders are a list (folder, path, a chip per device, sync state, Edit); invitations have their own
+  section, Shared with you, with Accept and Decline. Share a folder, Edit and the file manager's Share folder all open one
+  centred pop-up: All devices or a tick per device (with its system, or Not connected), Save or Share,
+  Stop sharing.
+- **Share screen map** (Multi-device, Mac, Windows and Linux): this computer's screens on the left,
+  every device on the right. Drag a screen onto a device (or select a screen, then the device) and its
+  window opens there: a real screen is mirrored, TwinDesk Virtual Display extends (one device at a
+  time). Each device shows what it gets, with Stop sharing here; devices not connected show Wake; the
+  Sharing now bar lists every share, with Stop all. The device in use (Multi-device's selected one)
+  comes first, marked In use. Fixed on the Mac: a per-device screen choice sent
+  only the device, so it never applied. Untested between devices.
+- **Notifications › Across devices** (Multi-device): a grid of who shows whose notifications. Each
+  cell reads All, the number of apps, or Off; selecting one of this computer's cells opens a panel
+  (All, Some, Off, and a switch per app). Any other cell can be changed from any device too (All or
+  Off): the change goes to the two devices it belongs to, which take it only while their own top
+  switches for that way are on (and never for the device they have selected). Apps are filtered on the receiving computer, so phones and
+  older versions need no update. **Receive all notifications** (off by default) shows every device's
+  notifications here and greys the grid out. Notifications left the Multi-device grid. Untested
+  between devices.
+- **Wording**: no middle dots in the interface; the Multi-device heading is just Multi-device.
+- **ReZume asks which device** in Multi-device: turned on with none selected, the top of the ReZume
+  tab lists the connected devices (a single device is selected automatically); a computer you select
+  also selects this one.
+  Cancel leaves ReZume off. The ReZume with picker on its page still changes it later.
+- **Manage the mesh from the phone** (Android, Overview › Multi-device, on unless a computer turns it
+  off): wake, lock, sleep, restart or shut down any computer of the mesh, unlock it (Full KVM),
+  approve or remove devices and move them in the layout. Unlock, restart, shut down, approve and
+  remove ask for the fingerprint first. Each computer can revoke a phone or switch it off in
+  Multi-device › Phones. Untested on devices.
+- **TwinDesk in Windows 11's first right-click menu** (not only under Show more options): Send to
+  each paired device, and Share folder on a folder. Its own small signed package for this PC's
+  architecture (x64 or ARM64), registered for you when TwinDesk starts and removed by the
+  uninstaller; Windows 10, the Store build and the portable build keep the classic menu. Needs the
+  helper built with Visual Studio's C++ tools. Untested on a PC (built by CI only).
+- **Share folder from the file manager**: Explorer (classic and Windows 11 menus), Finder (Quick
+  Actions › Share folder (TwinDesk)) and Nautilus, Caja, Nemo, Dolphin and Thunar on Linux. A
+  Share "<folder>" window asks which devices (or All); one-to-one confirms the other computer. Finder's Quick Action checked on a Mac with Automator; the
+  menus on Windows and Linux untested on a desktop.
+- **TwinDesk iPhone › Refresh all**, on the computer's Installed apps and in the iOS app's App refresh:
+  every sideloaded app on the device in one run, as AltStore does it. One sign-in, every app's new
+  provisioning profiles asked of Apple at once (four at a time) and installed together; only an app
+  that has to be signed again is (its certificate or Apple ID changed), TwinDesk last. What Apple's
+  limits don't allow yet is skipped with the reason: no app ID left this week (and the day Apple frees
+  one), a free Apple ID's 3 apps at a time, or no stored IPA. Progress per app on both sides.
+  Automatic refresh uses it too when two or more apps are due at once. Untested on a device.
+- **Multi-device, every feature per device** (#313, #256, #344 by [@icariantk](https://github.com/icariantk)): sound both ways with each
+  device at once, the microphone and camera, clipboard, notifications and files by each pair's own
+  choices, Wake, the Terminal's keys, Apps, Send to (an entry per computer), network folders and
+  Chats from every phone, no longer only the selected device's. **Monitor 2 per device**: two
+  computers' screens in two windows at once, and only the computer that asked opens it by itself.
+  **Multi-device › Who shares what**: one grid of every device and feature across the mesh.
+- **Lock together** (General, one-to-one and Multi-device, off): one computer locks, the others do
+  too (#322, #344 by [@icariantk](https://github.com/icariantk)).
+- **Cursor › Scrolling speed** (Mac): another computer's wheel here from 0.25× to 4× (#315, #344).
+- **Phone › Mouse hover** can be switched off (#330); **Shift-click, Ctrl/⌘+A and All** select in
+  the phone's Files and Photos (#319); a laptop's **touchscreen in a phone window** is multi-touch
+  (#316); a **gamepad plugged into the phone** works on the Remote page (#324); all from #344 by [@icariantk](https://github.com/icariantk).
+- **Bluetooth to Wi-Fi without discovery** (#287): a phone that came through Bluetooth on a network
+  that drops broadcasts dials the computer's own LAN addresses from the session (#344 by [@icariantk](https://github.com/icariantk)),
+  link-local ones too on a network with no DHCP server (#294 by [@alexfoxtm](https://github.com/alexfoxtm)).
+- **Displays & desktops** (Android viewer of a Mac): a sheet with this Mac's displays and its
+  desktops, a still of each (macOS 14 and Screen Recording; only while the sheet is open, and never
+  while the Mac is locked), previous/next desktop on the bar, and a tap switches the desktop on the
+  screen being shown. In Multi-device each phone sees the display it is shown (#264 by [@alexfoxtm](https://github.com/alexfoxtm)).
+- **Pinch to zoom sharpens** a Mac's, Windows' or Linux's shared screen on Android: the computer
+  sends the zoomed part at a higher resolution (#286 by [@alexfoxtm](https://github.com/alexfoxtm)).
+- **Touchpad feedback** on Android: a ring shows where the pointer goes on a desktop share, only
+  while the computer takes input (#288 by [@alexfoxtm](https://github.com/alexfoxtm)).
+- **Connection troubleshooter** (Overview, every computer and Android, folded until opened): the
+  link's transport, round trip and the stream's resolution, frame rate and bitrate, read from what
+  the session already measures; it starts no checks (#289 by [@alexfoxtm](https://github.com/alexfoxtm)).
+- **NixOS:** the flake builds today's Linux app (TwinDesk Web, the fast input lane, the iPhone
+  signer, runtime tools), and Full KVM is set in the configuration (`programs.twindesk.fullKvm`);
+  the app's Full KVM tab shows it and changes nothing (#281 by
+  [@ShivanshuKantPrasad](https://github.com/ShivanshuKantPrasad); the flake wasn't evaluated here).
+- **Themed icon** (Android 13 and later): with themed icons on, TwinDesk's icon takes the system's
+  colours (#345).
+- **Don't ask again** on the phone's Turn on wireless debugging prompt, for a device that can't keep
+  it on; Overview still sets it up (#345).
+- **Phone screen off while using apps** (Mac, Phone page, off): the phone's own panel stays dark
+  while its app windows are open, and a minimized app window stops painting (#284 by [@alexfoxtm](https://github.com/alexfoxtm)).
 
 - **Debug** (a new tab in Multi-device, on Windows, Linux and the Mac; off until a device lets another
   in): from any computer, every device of the mesh, connected directly or through another one. Its
@@ -95,6 +206,11 @@ Everyone who sent code, reported a problem or tested is thanked under their vers
 
 - **Cursor portals** (Mac): a stretch of one display's edge leads to a chosen stretch of the other
   computer's screen, and the pointer comes back through it (#177 by [@pengusto](https://github.com/pengusto)).
+  Now at the bottom of Mouse with its own switch (off by default), drawn instead of typed: click an
+  edge on each side's displays and drag the handles; a preview shows the portal opening as the
+  pointer comes close and goes through. While portals are on, Hold key to switch steps aside (each
+  portal has its own key). Multi-device too, a portal per computer; never towards a phone. Untested
+  on real displays.
 - **Share screen › Capture** (Windows): Original (Chromium, the default), Automatic, Desktop
   Duplication or Windows Graphics Capture; the pointer is shared at its real size, an enlarged
   accessibility pointer too (#235 by MOVE).
@@ -105,6 +221,26 @@ Everyone who sent code, reported a problem or tested is thanked under their vers
 
 ### Fixes
 
+- **Windows:** a click or drag on TwinDesk's own window from another computer no longer freezes the
+  session (#312, #334 by [@vullnetlimani](https://github.com/vullnetlimani), #344); back from a UAC
+  prompt, the local mouse isn't needed to reconnect (#210, #344).
+- **Full KVM:** no native input lane before the service is up, so on Linux the pointer comes back
+  (#311, #338 by [@VISHVAJITH-REDDY](https://github.com/VISHVAJITH-REDDY), #344).
+- **Multi-device:** a phone clicked to connect is selected once it's up (#317, #341 by [@VISHVAJITH-REDDY](https://github.com/VISHVAJITH-REDDY));
+  the Android clipboard reaches the Mac without its page open (#257); several phones show the right
+  screen (#263); every device uses the native input lane (#273); all from #344.
+- **Messenger:** Enter sends (#331, #342 by [@VISHVAJITH-REDDY](https://github.com/VISHVAJITH-REDDY)).
+- **Mac:** going to sleep ends the session cleanly and waking invites the guests back (#301 by [@alexfoxtm](https://github.com/alexfoxtm));
+  a clipboard read still in flight is dropped when a newer copy arrives, and While away copies stay
+  with their pair (#280 by [@alexfoxtm](https://github.com/alexfoxtm)); no freeze at the first session after an update; Quit isn't undone
+  by opening TwinDesk during it (#307 by [@alexfoxtm](https://github.com/alexfoxtm)); the release DMG is notarized and stapled when the
+  credentials are set (#75, #343 by [@VISHVAJITH-REDDY](https://github.com/VISHVAJITH-REDDY)).
+- **Linux:** on COSMIC the Full KVM pointer reaches every monitor (#244); Identify's labels no longer
+  overlap on KDE Wayland (#182); both from #344.
+- **Terminal:** the keys TwinDesk installs can't forward ports (#318 by
+  [@OAK06](https://github.com/OAK06)).
+- **AirPlay:** no second advertiser when port 7000 is taken (#299 by [@alexfoxtm](https://github.com/alexfoxtm)).
+- **Logs:** why a session socket closed, on every computer (#327, #337, #340 by [@VISHVAJITH-REDDY](https://github.com/VISHVAJITH-REDDY)).
 - **Typing into a phone** from a French (AZERTY) or other non-US keyboard: letters, AltGr's @ and
   €, accents and Ctrl+A land as typed, and the numpad works (#260).
 - **Several Android phones** (Windows, Linux, Mac): a second phone no longer shows the first one's
@@ -166,6 +302,13 @@ Everyone who sent code, reported a problem or tested is thanked under their vers
   Mount no longer took it for a phone on the USB cable.
 
 ### Fixed
+- Sound sent both ways no longer loops. Windows and Linux captured
+  everything their speakers played, TwinDesk's own playback of the other computer included, and sent
+  it back. Windows now captures with process loopback, leaving TwinDesk out (Windows 10 build 20348
+  and later, so Windows 11 in practice; older Windows keep the old capture). Linux plays the other
+  apps through a TwinDesk capture output that is passed on to the speakers, and TwinDesk's own sound
+  goes straight to the speakers. Mute while sending now works on Linux too. The Linux part was tested
+  on Ubuntu 24.04 (PipeWire); the Windows part is compiled by CI and untested on a PC.
 
 - **Drive** no longer sends its whole index to every computer each time a connection comes back.
   A computer whose network card kept dropping every few seconds sent 2.5 MB (10,000 files) to each

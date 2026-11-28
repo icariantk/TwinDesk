@@ -2,6 +2,7 @@
 // settings.json: defaults and validation. Every value from
 // disk or from the UI goes through normalize(), so main never stores anything out of range.
 const P = require('../shared/protocol.js');
+const { normRoutes } = require('../shared/sound-route.js');
 const CL = require('../shared/cursorlock.js');
 const Crossing = require('../shared/crossing.js');
 const { savedLanguage } = require('../shared/i18n.js');
@@ -142,6 +143,8 @@ function normalize(s) {
       volume: Math.round(num(audio.volume, 1, 0, 1) * 100) / 100,
       send: bool(audio.send, false), // send this PC's sound to the Mac (dir w2m)
       muteLocal: bool(audio.muteLocal, false), // silence this PC while sending
+      routes: normRoutes(audio.routes), // the mixer: each sender's sound on which of our speakers, how loud (shared/sound-route.js)
+      sync: bool(audio.sync, false), // Keep speakers in sync: our sound held to one delay on every receiver
       // A phone: its media controls on Overview (shared/nowplaying.js), and its sound here over
       // Bluetooth, this computer as its speaker (shared/btaudio.js), off until turned on
       phoneMedia: bool(audio.phoneMedia, false),
@@ -198,6 +201,7 @@ function normalize(s) {
       remote: bool(pcs.remote, true), // The viewer may start/stop and switch it (screen.ctl)
     },
     pairSync: pairSync(s.pairSync), // {deviceId: {feature: {out, in}}} (pairsync.js)
+    drop: require('../shared/drop.js').normalize(s.drop), // Drop: on, and the devices blocked there (shared/drop.js)
     wake: { peers: wakePeers(wk.peers) }, // {deviceId: {name, os, macs, address, at}} from wol.info
     // moveWindows: the move key held, a window clicked and dragged past the shared edge goes to the
     // other computer (shared/movewin.js), off until switched on; moveKey: which key.
@@ -229,7 +233,7 @@ function normalize(s) {
     // bleWifiOff: none at all while the session is on the same Wi-Fi (blepolicy.js wifiQuiet)
     net: { ble: bool(nt.ble, true), blePc: bool(nt.blePc, false), bleWifiOff: bool(nt.bleWifiOff, true), hotspots: hotspots(nt.hotspots), keepWifi: bool(nt.keepWifi, true), tailscale: bool(nt.tailscale, true), bleInput: bool(nt.bleInput, false), relay: require('../shared/relay.js').clean(nt.relay) }, // relay: your own (shared/relay.js), none by default // tailscale: shared/tailnet.js; bleInput: shared/bleinput.js
     mount: { on: bool(mt.on, false) }, // the phone as a drive (phonedrive.js), only when Mount is clicked
-    drive: { on: bool(dr.on, false), folder: typeof dr.folder === 'string' ? dr.folder.slice(0, 1024) : '' }, // File Sharing › TwinDesk Drive (shared/drive-host.js); '' = ~/TwinDesk Drive
+    drive: { on: bool(dr.on, false), folder: typeof dr.folder === 'string' ? dr.folder.slice(0, 1024) : '', ...require('../shared/drive-folders.js').clean(dr) }, // File Sharing › TwinDesk Shared folders (shared/drive-host.js); '' = ~/TwinDesk Drive; devices and the shared folders (shared/drive-folders.js)
     // Calls, Messages, Photos and Files from a phone (shared/phonehub.js), each off until switched on.
     // callAudio: the calls' sound here over Bluetooth; btDevices: which paired Bluetooth device each
     // phone is (its device id -> the Bluetooth device's id), found by its name or picked.

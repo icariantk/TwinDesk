@@ -77,8 +77,27 @@ and start only when the other side answers.
 
 | Message | Feature | An app without it |
 |---|---|---|
-| `drive.hello {v: 1}` | TwinDesk Drive ([drive.md](drive.md)), both sides switched on | ignores it, so Drive never starts |
+| `drive.hello {v: 1}` | TwinDesk Drive or Shared folders ([drive.md](drive.md)), both sides switched on | ignores it, so Drive never starts |
+| `drive.folders {list}` (after `drive.hello`) | Shared folders, each with its own devices ([drive.md](drive.md)) | an older app never sends it and is never sent a folder's `f` messages; only the main folder syncs with it |
+| `audio.outs {outs, route, lat}` (receiver to sender, while the sender's sound plays there) | Audio › the mixer: the receiver's speakers, the route it keeps for that sender and the delay heard (`shared/sound-route.js`) | an older receiver never sends it: the sender's mixer shows that computer with no speakers to pick, and its sound plays on its default speaker, as before |
+| `audio.route {outs?, sync?}` (sender to receiver) | Audio › the mixer: the sender's pick of the receiver's speakers, and Keep speakers in sync (ms) | an older receiver ignores it |
+| `mesh.ask` (phone to computer) | Manage the mesh from the phone (`shared/mesh-manage.js`, `MeshMgr.kt`) | an older computer ignores it, so the phone shows no Multi-device card; a computer with it off refuses each action (`mesh.done {why: off}`) |
 | `tether.state {can: true}` (phone to computer, as its session starts) | Internet over USB (`shared/tether.js`, `Tether.kt`) | an older phone never sends it, so the computer shows no Internet over USB card and never sends `tether`; an older computer ignores it |
+| `drop.hi {ids, gone, since?}` (either way, as a link comes up) | Drop (`shared/drop.js`, `Drop.kt`, `Drop.swift`): each side lists the messages it has; the other sends what's missing (`drop.msgs`), then new ones as `drop.msg` and deletions as `drop.del` | an older app ignores it, so no Drop messages go to or come from it |
+| `drop.who` (phone to computer; the computer answers `{members}`) | Drop's To picker on a phone: the devices in the conversation, the computer first | an older computer never answers: the phone offers Everyone only |
+| `kvm.take {portal: {target, offset}}` (with `side` and `offset` too) | Cursor portals (`shared/cursor-portals.js`): the Mac places the pointer on the portal's range and arms the way back there (`portalCapabilities` 3 in its helper) | an app without portals places the pointer by `side` and `offset`, as an ordinary crossing |
+
+## Screen sharing to a phone (offer and screen.state fields)
+
+Each is switched on by a field the computer sends; the messages themselves are described in
+`shared/protocol.js`.
+
+| Field | Sent in | Meaning | An app without it |
+|---|---|---|---|
+| `detail {baseline, fps, sizes}` | `rtc2.offer` (Mac, Windows, Linux) | The sizes this screen share can be sent at. The phone pinches to zoom and asks for one with `rtc.detail {session, height}`, which counts only from the socket the share was offered on (#286) | no `detail`: the phone keeps one size and has no pinch or three-finger pan; an older phone never sends `rtc.detail` |
+| `input: true\|false` | `screen.state` | Whether this computer applies the share's input now; the phone shows its touchpad ring only while true (#288) | no ring |
+| `spaces`, `desktops`, `spaceHold` | `screen.state` (Mac only) | Previous/next desktop on the display being shown, the catalog of its displays and desktops, and why remote control is paused (Mission Control open, accessibility unreadable). In Multi-device each device's message is for the display it is shown (#264) | no Displays & desktops sheet; the bar keeps Mirror, Extend and the display list |
+| `screen.preview.want` answered by `screen.preview` | Mac only | A still of each desktop while the phone's sheet is open, one device at a time; `unavailable` on macOS 13 or without Screen Recording | no stills (the sheet says Not previewed yet) |
 
 ## Phone capabilities
 

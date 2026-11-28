@@ -157,6 +157,7 @@ private enum class Tab(val title: String, val icon: ImageVector, val colors: Lis
     Notifications("Notifications", Ico.bell, grad(0xFFFF6961, 0xFFFF3B30), "Share"),
     Files("Files", Ico.files, grad(0xFF64D2FF, 0xFF0A84FF), "Share"),
     Rezume("ReZume", Ico.rezume, grad(0xFF64D2FF, 0xFF0A84FF), "Share"),
+    Drop("Drop", Ico.message, grad(0xFFFFCC00, 0xFFFF9500), "Share"), // one conversation with every device (Drop.kt)
     Sound("Sound", Ico.audio, grad(0xFFFF6482, 0xFFFF2D55), "More"),
     Media("Media", Ico.media, grad(0xFFFF6482, 0xFFBF5AF2), "More"),
     Camera("Camera", Ico.camera, grad(0xFFBF5AF2, 0xFF8944AB), "More"),
@@ -221,6 +222,7 @@ private fun isOnPc(core: Core, t: Tab): Boolean = when (t) {
     Tab.Media -> core.pcMedia.now?.playing == true
     Tab.Camera -> core.adb.camera.on
     Tab.Rezume -> core.rezume.on
+    Tab.Drop -> core.drop.on
     Tab.Calls -> core.hub.callsOn
     Tab.Messages -> core.hub.messagesOn
     Tab.Photos -> core.hub.mediaOn
@@ -255,10 +257,11 @@ fun App(core: Core, resumed: Int) {
         MainActivity.openTab.value = null
     }
     val wide = LocalConfiguration.current.screenWidthDp >= 600
-    // Wireless debugging went off (MIUI / HyperOS): ask once per time it happens.
+    // Wireless debugging went off (MIUI / HyperOS): ask once per time it happens. Don't ask again keeps it
+    // quiet on this device for good (a work tablet that can't keep it on, #345); Overview still sets it up.
     var adbAsked by rememberSaveable { mutableStateOf(false) }
     if (!core.adb.off) adbAsked = false
-    if (core.adb.off && !adbAsked && !core.link.ble) { // over Bluetooth it can't be used anyway
+    if (core.adb.off && !adbAsked && !core.link.ble && !core.store.flag("adb.noAsk", false)) { // over Bluetooth it can't be used anyway
         val name = them(core)
         AlertDialog(
             onDismissRequest = { adbAsked = true },
@@ -273,7 +276,12 @@ fun App(core: Core, resumed: Int) {
                 )
             },
             confirmButton = { TextButton(onClick = { adbAsked = true; core.adb.openSettings() }) { Text(tr("Open Settings"), color = pal.accent) } },
-            dismissButton = { TextButton(onClick = { adbAsked = true }) { Text(tr("Not now"), color = pal.muted) } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { adbAsked = true; core.store.setFlag("adb.noAsk", true) }) { Text(tr("Don’t ask again"), color = pal.muted) }
+                    TextButton(onClick = { adbAsked = true }) { Text(tr("Not now"), color = pal.muted) }
+                }
+            },
         )
     }
 
@@ -522,6 +530,11 @@ private fun MoreList(core: Core, v: Int, BOTTOM: List<Tab>, modifier: Modifier, 
 @Composable
 private fun Page(core: Core, v: Int, resumed: Int, tab: Tab, modifier: Modifier) {
     @Suppress("UNUSED_EXPRESSION") v // redraw on every Core change (Compose skips unread parameters)
+    // Drop: the conversation fills the page, which doesn't scroll (its messages do).
+    if (tab == Tab.Drop && !peerMode(core)) {
+        Column(modifier.fillMaxHeight().padding(horizontal = 24.dp, vertical = 20.dp)) { Column(Modifier.widthIn(max = 820.dp).weight(1f)) { DropPage(core, v) } }
+        return
+    }
     Column(modifier.fillMaxHeight().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 20.dp)) {
         Column(Modifier.widthIn(max = 820.dp)) {
             if (peerMode(core) && tab != Tab.Connection && tab != Tab.General && tab != Tab.About) PeerPage(core, v, tab.name)
@@ -541,6 +554,7 @@ private fun Page(core: Core, v: Int, resumed: Int, tab: Tab, modifier: Modifier)
                 Tab.Notifications -> NotificationsPage(core, v + resumed)
                 Tab.Files -> FilesPage(core, v)
                 Tab.Rezume -> RezumePage(core, v)
+                Tab.Drop -> Unit // above
                 Tab.Sound -> SoundPage(core, v)
                 Tab.Media -> MediaPage(core, v)
                 Tab.Camera -> CameraPage(core, v)
@@ -646,8 +660,13 @@ private fun OverviewPage(core: Core, v: Int, connection: Boolean) {
     if (Modern.on) HeroCard { HeroBody(core, v, me, host, link, heroAccent) } else MacCard { HeroBody(core, v, me, host, link, heroAccent) }
 
 
+    if (connection) ConnectionDoctorCard(core, v)
+
     // The computer's own controls (dev.state, DevCtl.kt): ring, lock, sleep, Bluetooth, Do not disturb, volume.
     if (!connection && host != null) ComputerCard(core, host.name)
+
+    // Every computer of its mesh (MeshMgr.kt): wake, lock, restart… any of them, pairings, the layout.
+    if (!connection && host != null) MeshCard(core, v)
 
     // Shortcuts (Tiles.kt): its screen, voice typing, the touchpad, files… as tiles, edited here.
     if (!connection && host != null) TilesCard(core)
@@ -713,6 +732,57 @@ private fun OverviewPage(core: Core, v: Int, connection: Boolean) {
 
     // Connect with Android (PeerUi.kt): another phone, beside the computer, at the bottom.
     if (connection) AndroidSection(core, v)
+}
+
+@Composable
+private fun ConnectionDoctorCard(core: Core, version: Int) {
+    var expanded by remember { mutableStateOf(false) }
+    MacCard {
+        MacRow(tr("Connection troubleshooter"), first = true) {
+            Secondary(if (expanded) tr("Hide") else tr("Show")) { expanded = !expanded }
+        }
+        if (expanded) ConnectionDoctorDetails(core, version)
+    }
+}
+
+@Composable
+private fun ConnectionDoctorDetails(core: Core, version: Int) {
+    @Suppress("UNUSED_EXPRESSION") version
+    val link = core.link
+    val selected = if (link.pair == null) link.host?.let { current -> core.hosts().find { it.id == current.id && it.fp == current.fp } } else null
+    val close = selected?.let(link::doctorClose)
+    val status = when {
+        link.pair != null -> tr("Pairing…")
+        link.connected -> tr("Connected")
+        link.state == "connecting" -> tr("Connecting…")
+        link.state == "failed" -> tr("Connection failed")
+        core.returning != null -> tr("Reconnecting…")
+        else -> tr("Not connected")
+    }
+    val reason = when (close?.reason) {
+        ConnectionCloseReason.LOCAL -> tr("Disconnected here")
+        ConnectionCloseReason.INTERRUPTED -> tr("Connection interrupted")
+        ConnectionCloseReason.ASLEEP -> tr("Computer asleep")
+        ConnectionCloseReason.REPLACED -> tr("Another device took over")
+        ConnectionCloseReason.RELEASED -> tr("Computer ended the connection")
+        ConnectionCloseReason.BAD_PAIRING -> tr("Pairing no longer accepted")
+        ConnectionCloseReason.IDENTITY -> tr("Identity could not be verified")
+        ConnectionCloseReason.VERSION -> tr("Different app version")
+        ConnectionCloseReason.PAUSED -> tr("Reconnect paused")
+        null -> tr("No connection event recorded")
+    }
+    MacRow(tr("Pairing"), selected?.let { tr("Paired · {name}", "name" to it.name) } ?: tr("No computer selected"))
+    MacRow(tr("Connection"), status)
+    if (link.connected) {
+        MacRow(tr("Transport"), doctorTransport(core))
+        MacRow(tr("Round-trip time"), link.rttMs?.let { "$it ms" } ?: tr("No reply measured yet"))
+    }
+    if (selected != null) {
+        val stamp = close?.let { android.text.format.DateFormat.getTimeFormat(LocalContext.current).format(java.util.Date(it.at)) }
+        MacRow(tr("Last connection event"), listOfNotNull(reason, stamp).joinToString(" · "))
+    }
+    MacRow(if (core.screen.viewing && core.screen.videoPlaying) tr("Stream") else tr("Last stream"),
+        core.screen.doctorSummary ?: tr("No stream measured on this connection"))
 }
 
 // The connected computer's controls, when it has them (an older TwinDesk says nothing: no card).

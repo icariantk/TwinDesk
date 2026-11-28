@@ -31,8 +31,18 @@ UI.tab({
 
     const showing = UI.notifShowCard ? UI.notifShowCard() : null; // how they show here (shared/ui-notifrules.js)
 
+    // Multi-device: who shows whose notifications, per app (shared/ui-matrix.js; hidden one-to-one).
+    const across = window.MeshMatrix && MeshMatrix.notifs ? MeshMatrix.notifs({
+      toggle: (id, dir, on) => api.setConsent(id, 'notifs', dir, on),
+      setCell: (from, to, on) => api.setCell && api.setCell(from, to, 'notifs', on),
+      setApp: (from, app, name, show) => api.setNotifs({ fromApp: { from, app, name, hide: !show } }),
+      showAll: (from) => api.setNotifs({ fromApp: { from, all: true } }),
+      takeAll: (on) => api.setNotifs({ takeAll: on }),
+    }) : null;
+    if (across) across.el.hidden = true;
     body.append(
       UI.pair(UI.dir('m2w', [sendRow, fdaRow, hideRow]), UI.dir('w2m', [recvRow])),
+      ...(across ? [across.el] : []),
       ...(showing ? [showing.el] : []),
       UI.card(I18n.t('Apps'), [apps]),
       hist.el,
@@ -40,6 +50,7 @@ UI.tab({
 
     let key = '';
     return (s) => {
+      if (across) across.render(s.matrix, s.notifs);
       const n = s.notifs;
       if (showing && n) showing.update(s);
       hist.update(s);

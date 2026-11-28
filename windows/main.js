@@ -6,6 +6,7 @@ try {
   if (typeof m.enableCompileCache === 'function') m.enableCompileCache();
 } catch {}
 const Mods = require('../shared/modules.js'); // General › Modules: the ones off at start aren't loaded
+const FolderMenu = require('../shared/foldermenu.js'); // the file manager's Share this folder
 let modulesAtStart = [];
 const Engines = require('../shared/engines.js'); // General › Advanced › Engines in use
 const { lanType } = require('../shared/lantype.js'); // Wi-Fi or Ethernet for Overview (#140)
@@ -111,6 +112,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', (_e, argv) => {
     if (openLink(argv)) return;
     if (sendTo && sendTo.handle(argv)) return; // Explorer › Send to
+    if (shareFolderArg(argv)) return; // Explorer › Share this folder
     if (!openMacAppArg(argv) && !openPhoneAppArg(argv)) showMain();
   });
   app.whenReady().then(start);
@@ -151,6 +153,8 @@ let settings = null;
 let awake = null; // shared/keepawake.js
 let device = null;
 let drive = null; // File Sharing › TwinDesk Drive (shared/drive-host.js), only once it's on
+let folders = null; // File Sharing › Shared folders and the Share folder sheet (shared/folders-host.js)
+let drop = null; // Drop: one conversation with every device (shared/drop-host.js)
 let screen = null;
 let clip = null;
 let historyKeeper = null; // Clipboard and Notifications › History: kept encrypted when asked (shared/histkeeper.js)
@@ -181,6 +185,7 @@ let pairSync = null;
 let fileRecv = null;
 let notifs = null;
 let explorer = null; // Explorer's right-click › TwinDesk (explorer.js)
+let shellMenu = null; // Windows 11's first-level right-click menu (shellmenu.js)
 let iosSign = null; // shared/iossign.js: TwinDesk iPhone
 let pcNowRef = null; // what plays here (shared/pcnow.js), for Calls › Pause what plays here
 let devctl = null; // Overview's controls of the other device, and this PC's for it (shared/devctl.js)
@@ -266,7 +271,18 @@ function start() {
   // General › Keep the display awake while a computer is connected (shared/keepawake.js, #240).
   awake = require('../shared/keepawake.js').keepAwake(() => settings.app.keepAwake !== false && link && link.status.state === 'connected' && !(link.current && P.isPhoneOs(link.current.os)));
   link.setPlain(settings.files.plain === true); // Files › Encrypt file transfers
-  if (settings.drive.on) loadDrive();
+  if (settings.drive.on || (settings.drive.folders || []).length) loadDrive(); // Drive, or shared folders
+  // Drop (shared/drop.js): one conversation with every TwinDesk device, through this app's links.
+  drop = require('../shared/drop-host.js').start({ selfId: device.id, name: () => device.name, os: P.OS.WIN, settings: () => settings, save: saveSettings, push: pushState, link }, () => mainWin);
+  // Shared folders (shared/folders-host.js): the File Sharing card, and the sheet the file manager's Share folder opens.
+  folders = require('../shared/folders-host.js').foldersHost({
+    settings: () => settings, save: saveSettings, push: pushState, getDrive: () => drive, folders: () => folders, loadDrive,
+    phoneShare: () => { const h = hub || (phoneLink ? loadHub() : null); return h && h.share; },
+    devices: () => (() => { const v = peerView(); return v && v.id ? [{ id: v.id, name: v.name, os: v.os }] : []; })(),
+    pick: async () => { const r = await require('electron').dialog.showOpenDialog(mainWin, { properties: ['openDirectory', 'createDirectory'] }); return r.canceled ? '' : r.filePaths[0] || ''; },
+    show: () => goTab('files'),
+    open: (f) => require('electron').shell.openPath(f),
+  });
   // The files engine (shared/fx2.js) stays up while another TwinDesk computer is on the network: a
   // session with it then starts without waiting for it. Alone, it isn't running at all.
   const fx2Nearby = () => { if (link.fx2) link.fx2.need('nearby', discovery.found.size > 0); };
@@ -332,10 +348,11 @@ function start() {
   screen.fileDrop = fileDrop;
   apps = new Apps({ link, allowed: () => settings.macApps.on, getLanguage: () => i18n.locale, getMonitor: () => screen.win, popup: (kind, text) => hud && hud.show(kind, text), peerName, onChange: pushState, onWatch: () => screen.policy() });
   screen.apps = apps;
-  sound = new Sound({ link, settings, onChange: pushState });
+  sound = new Sound({ link, settings, save: saveSettings, onChange: pushState }); // save: the mixer's routes (shared/sound-route.js)
   loadMic();
   smb = new Smb({ link, settings, save: saveSettings, onChange: pushState });
   helper = new Helper();
+  require('./syscapture').useHelper(helper); // Send sound: this PC's sound without TwinDesk's own (no loop both ways)
   require('../shared/web/pcmedia.js').PcMedia.useHelper((cmd, args) => helper.request(cmd, args, 8000)); // what plays, without PowerShell
   if (require('../shared/edition.js').fullKvm()) require('./fullkvm/manager.js').attach({ helper }); // the Full KVM build: its tab and service (docs/full-kvm.md)
   screen.helper = helper; // Wi-Fi low-latency mode while a screen is shown (Wlan.cs)
@@ -384,6 +401,8 @@ function start() {
   kvm.fileClip = fileClip; // Our copy/paste shortcut while driving → fclip.key
   fileClip.kvm = kvm; // …also when the keyboard isn't shared
   sendTo = new SendTo({ link, fileDrop, peerName: () => (peerView() || {}).name || '', popup: (kind, text, sub) => hud.show(kind, text, sub) });
+  shellMenu = new (require('./shellmenu').ShellMenu)({ t, markFile: path.join(app.getPath('userData'), 'shellmenu.json') });
+  shellMenu.start();
   // Copy/paste and Send files show progress in the popup, like a drag. Receiving: every
   // batch that takes longer than a moment; sending: batches over 5 MB.
   const pct = (n, total) => Math.min(99, Math.floor((n / total) * 100));
@@ -480,7 +499,13 @@ function start() {
   // TwinDesk Web (web.js): an iPhone's (or any browser's) own pages here, beside the one session.
   web = require('./web').setupWeb({ deck: (bus) => (loadDeck() ? deck.web(bus) : null), settings: () => settings, save: saveSettings, pushState, t, device: () => device, helper, smb, notifs, fileClip, vdd, pcScreen,
     kvm: () => kvm, devctl: () => devctl, loadVcam });
-  const ipc = setupIpc({ takePhoto: () => !!phonePhoto && phonePhoto.take(), loadDrive, getDrive: () => drive, history: (r) => historyKeeper && historyKeeper.act(r), deck: () => loadDeck(), clearFiles: () => { fileDrop.last = null; if (fileRecv) fileRecv.last = null; if (kvm && kvm.dragRecv) kvm.dragRecv.last = null; pushState(); }, // Files › Recent › Clear: only the list
+  const ipc = setupIpc({
+    takePhoto: () => !!phonePhoto && phonePhoto.take(),
+    loadDrive,
+    getDrive: () => drive,
+    history: (r) => historyKeeper && historyKeeper.act(r),
+    deck: () => loadDeck(),
+    clearFiles: () => { fileDrop.last = null; if (fileRecv) fileRecv.last = null; if (kvm && kvm.dragRecv) kvm.dragRecv.last = null; pushState(); }, // Files › Recent › Clear: only the list
     iosSign: () => iosSign, devctl: () => devctl, chats: () => chats, explorer: () => explorer, qrPair: qrPairView, adbQr: adbQrDo, link, discovery, screen, clip, kvm, sshd, fileDrop, smb, apps, sound, pcScreen, pcApps, peerApps, vdd, notifs, fileClip, wake, updates, settings, save: saveSettings, push: pushState, buildState,
     get rezume() { return rezume; }, loadReZume,
     get phone() { return phone; }, get phoneViews() { return phoneViews; }, get camShare() { return camShare; }, get vcam() { return vcam; }, get phoneRemote() { return phoneRemote; }, get nowPlaying() { return nowPlaying; }, get btAudio() { return btAudio; }, get phoneDrive() { return phoneDrive; }, get terminal() { return terminal; }, loadRemote, setCamera, loadNowPlaying, loadBtAudio, loadMic, loadTerminal, connectPhoneDev, cancelPhoneInvite, hub: loadHub,
@@ -499,7 +524,7 @@ function start() {
   });
   createTray();
   if (!startHidden) createMainWindow(); // in the tray: made when it's first opened
-  if (!openLink(process.argv) && !sendTo.handle(process.argv) && !openMacAppArg(process.argv)) openPhoneAppArg(process.argv);
+  if (!openLink(process.argv) && !sendTo.handle(process.argv) && !shareFolderArg(process.argv) && !openMacAppArg(process.argv)) openPhoneAppArg(process.argv);
   setTimeout(checkFirewall, 3000);
   if (process.argv.includes('--test-monitor')) screen.open(true); // dev: ?test=1 pattern
 }
@@ -858,12 +883,24 @@ function loadTerminal() {
 
 function setupHub(pl) {
   phoneLink = pl;
-  const anyOn = () => settings.hub.calls || settings.hub.messages || settings.hub.media || settings.hub.files || settings.hub.shareServe || settings.hub.tether;
+  const anyOn = () => settings.hub.calls || settings.hub.messages || settings.hub.media || settings.hub.files || settings.hub.shareServe || settings.hub.tether || !!(settings.drive.folders || []).length; // shared folders: the phone's are served
   pl.on('client', (ctx) => P.isPhoneOs(ctx.os) && !hub && anyOn() && loadHub());
   // The phone shares a folder: loaded for it (its listener comes with it, so this one passes it on).
   pl.on(`t:${P.T.SHARE_OFFER}`, (m, ctx) => ctx && ctx.os === P.OS.ANDROID && !hub && loadHub().share && hub.share.onOffer(m));
   pl.on(`t:${P.T.SHARE_SET}`, (m, ctx) => ctx && ctx.os === P.OS.ANDROID && !hub && loadHub().share && hub.share.act('serve', { on: !!m.serve }));
   pl.on('t:tether.state', (m, ctx) => ctx && ctx.os === P.OS.ANDROID && m.can === true && !hub && loadHub().tether && hub.tether._state(m)); // a phone that can take Internet over USB (shared/tether.js)
+}
+
+// Share this folder from the file manager's menu (shared/foldermenu.js): `--td share <folder>`.
+function shareFolderArg(argv) {
+  const dir = FolderMenu.fromArgv(argv);
+  if (dir === null) return false;
+  if (dir && settings) shareFolder(dir);
+  return true;
+}
+
+function shareFolder(dir) {
+  if (folders) folders.ask(dir); // the sheet: which devices (shared/folders-host.js)
 }
 
 function loadHub() {
@@ -1193,6 +1230,7 @@ function pushState() {
     if (fileClip) fileClip.syncConnected(kvm.connected); // the file shortcuts too
     if (pcScreen) pcScreen.sendState(); // The viewer learns what we share
     if (sendTo) sendTo.sync(s.peer && s.peer.name);
+    if (shellMenu) shellMenu.devices(s.peer && s.peer.name);
     if (pairSync) pairSync.check(); // Tell the other computer what changed here // the Send to entry follows the peer's name
     // A pairing code to compare: bring the window to the front.
     const phase = s.pairing ? s.pairing.phase : null;
@@ -1345,6 +1383,8 @@ function buildState() {
     iosSign: iosSign ? iosSign.view : null, // TwinDesk iPhone
     mount: { ...(phoneDrive ? phoneDrive.view : {}), on: settings.mount.on },
     drive: drive ? drive.view() : { on: false, folder: settings.drive.folder || path.join(os.homedir(), 'TwinDesk Drive'), custom: !!settings.drive.folder },
+    folders: folders ? folders.view() : null, // File Sharing › Shared folders, and the Share folder sheet
+    drop: drop ? drop.state() : null, // Drop (shared/drop-host.js): the page asks for the room when rev changes
     // Calls, Messages and Photos: the settings alone until the hub is loaded (setupHub).
     hub: hub ? hub.view : { ...settings.hub, connected: false },
     net: { ...(net ? net.view : {}), relay: { ...require('../shared/relay.js').clean(settings.net.relay), ...require('../shared/relay.js').view() }, ...hotspotView(), location: !!wifi && wifi.refusedLocation, ble: settings.net.ble, blePc: settings.net.blePc, bleWifiOff: settings.net.bleWifiOff, bleOff, radio: bleHost ? bleHost.state : bleGuest ? bleGuest.state : 'off', transport: link.current ? link.current.transport : '', lan: lanType(link.current && link.current.address), tailscale: settings.net.tailscale !== false, tailnet: require('../shared/tailnet.js').mine(), bleInput: settings.net.bleInput === true },
@@ -1636,6 +1676,7 @@ function loadMic() {
 }
 
 app.on('before-quit', () => {
+  require('./syscapture').shutdown(); // a speaker mute it made, given back
   if (localApi) localApi.stop();
   if (web) web.shutdown();
   if (mic) mic.shutdown();

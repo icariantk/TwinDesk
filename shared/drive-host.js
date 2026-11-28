@@ -25,127 +25,146 @@ const DRIVE_TYPES = [P.T.DRIVE_HELLO, P.T.DRIVE_INDEX, P.T.DRIVE_UPDATE, P.T.DRI
 const defaultFolder = () => path.join(os.homedir(), 'TwinDesk Drive');
 
 function create({ settings, save, me, meName, userData, trash, adapter, onChange = () => {} }) {
-  let drive = null, link = null, up = false, hooked = false, error = '';
-  const cfg = () => settings.drive || (settings.drive = { on: false, folder: '' });
-  const folder = () => cfg().folder || defaultFolder();
-
-  // The session's events go to the link while there is one (registered once: some adapters can't unregister).
-  const hook = () => {
-    if (hooked) return;
-    hooked = true;
-    for (const t of DRIVE_TYPES) adapter.on(t, (m) => link && link.onMessage(m));
-    adapter.onUp(() => { up = true; if (link) link.start(); onChange(); });
-    adapter.onDown(() => { up = false; if (link) link.stop(); onChange(); });
-    adapter.onMoved(() => link && link.kick());
-  };
-
-  async function start() {
-    if (drive) return;
-    const { Drive } = require('./drive.js');
-    const { DriveLink } = require('./drive-link.js');
-    hook();
-    drive = new Drive({ me, meName, folder, indexFile: path.join(userData, 'drive-index.json'), trash });
-    drive.on('change', onChange);
-    link = new DriveLink({ drive, send: (m) => adapter.send(m), session: () => adapter.session(), peerName: () => adapter.peerName(), onChange });
-    adapter.setRequest((req, res) => link.request(req, res));
-    try {
-      await drive.start();
-      error = '';
-    } catch (e) {
-      error = e.message;
-    }
-    if (up || adapter.session()) link.start();
-    onChange();
-  }
-
-  async function stop() {
-    adapter.setRequest(null);
-    if (link) link.destroy();
-    link = null;
-    const d = drive;
-    drive = null;
-    if (d) await d.stop();
-    onChange();
-  }
-
-  const host = {
-    async setOn(on) {
-      cfg().on = !!on;
-      save();
-      if (on) await start();
-      else await stop();
-    },
-    // A new folder: the index starts again there (the old folder's files stay where they are).
-    async setFolder(f) {
-      cfg().folder = typeof f === 'string' ? f : '';
-      save();
-      if (drive) { await stop(); await start(); }
-      onChange();
-    },
-    folder,
-    view() {
-      const s = drive ? drive.status() : null;
-      const l = link ? link.status() : { connected: false, moving: 0 };
-      return {
-        on: cfg().on === true, folder: folder(), custom: !!cfg().folder,
-        state: s ? s.state : 'off', files: s ? s.files : 0, bytes: s ? s.bytes : 0,
-        skipped: s ? s.skipped : 0, conflicts: s ? s.conflicts : 0, lastSync: s ? s.lastSync : 0,
-        connected: l.connected, moving: l.moving, peer: l.connected ? adapter.peerName() : '',
-        error: error || (s && s.error) || '',
-      };
-    },
-    stop,
-  };
-  if (cfg().on) start();
-  return host;
+  return createMesh({ settings, save, me, meName, userData, trash, onChange, mesh: soloMesh(adapter) });
 }
 
-// Multi-device: every connected computer syncs with the one engine here. A change adopted from one
-// goes on to the others (the engine's 'changed'), so they all end up the same.
-function createMesh({ settings, save, me, meName, userData, trash, mesh, onChange = () => {} }) {
-  let drive = null, DriveLink = null, HEADER = '', PATH = '', hooked = false, error = '';
-  const links = new Map(); // peer id -> DriveLink, while that computer is connected
-  let memories = new Map(); // peer id -> where we are in its index, its reconnects (DriveLink's memory)
-  const cfg = () => settings.drive || (settings.drive = { on: false, folder: '' });
-  const folder = () => cfg().folder || defaultFolder();
+// One to one: the session as a mesh of one device, so the main folder and the shared folders run on the
+// same code as in Multi-device. The main folder speaks as before; an older TwinDesk never lists a shared
+// folder, so it never gets one's messages. adapter.peerId() (optional): the other device's id, for the
+// folders shared with some devices only; adapter.isComputer() (optional, else true).
+function soloMesh(adapter) {
+  let up = !!adapter.session();
+  const id = () => (adapter.peerId && adapter.peerId()) || 'peer';
+  const fns = { welcome: [], closed: [], transport: [] };
+  let wired = false;
+  const wire = () => {
+    if (wired) return;
+    wired = true;
+    adapter.onUp(() => { up = true; for (const fn of fns.welcome) fn(id()); });
+    adapter.onDown(() => { up = false; for (const fn of fns.closed) fn(id()); });
+    adapter.onMoved(() => { for (const fn of fns.transport) fn(id()); });
+  };
+  return {
+    on: (t, fn) => adapter.on(t, (m) => fn(m, id())),
+    onPeer: (ev, fn) => { wire(); fns[ev].push(fn); },
+    send: (_id, m) => adapter.send(m),
+    session: () => adapter.session(),
+    peerName: () => adapter.peerName() || 'the other computer',
+    isComputer: () => (adapter.isComputer ? !!adapter.isComputer() : true),
+    connectedIds: () => (up || adapter.session() ? [id()] : []),
+    setRequest: (fn) => adapter.setRequest(fn),
+  };
+}
 
-  const open = (id) => {
-    if (links.has(id)) return links.get(id);
-    if (!drive || !id || !mesh.isComputer(id)) return null;
-    if (!memories.has(id)) memories.set(id, {});
-    const l = new DriveLink({ drive, send: (m) => mesh.send(id, m), session: () => mesh.session(id), peerName: () => mesh.peerName(id), onChange, memory: memories.get(id) });
-    links.set(id, l);
+// Multi-device: the main folder and any extra folders (phase 3: shared folders per PC), each its own
+// engine (its own index file) and a link to each connected computer it's shared with. A change adopted
+// from one computer goes on to the others (the engine's 'changed'), so they all end up the same.
+//
+// settings.drive = {on, folder, devices?, folders: [{id, name, path, devices}]}
+//   devices: 'all' (or missing) = every computer of the mesh, else the ids it's shared with. The main
+//   folder speaks as before (no f); an extra folder's messages carry f = its id.
+// drive.folders {list: [{f, name}]}: what this computer shares with that one, said on every session and
+// change. A computer that hasn't the folder sees it as offered (Add); an extra folder's link opens only
+// once the other side listed it too, so an older TwinDesk never gets an f it would take as the main one.
+const FOLDERS = 'drive.folders';
+const DF = require('./drive-folders.js');
+const MAX_FOLDERS = DF.MAX;
+const { safeName, cleanDevices } = DF;
+
+function createMesh({ settings, save, me, meName, userData, trash, mesh, onChange = () => {} }) {
+  let Drive = null, DriveLink = null, HEADER = '', PATH = '', hooked = false, running = false;
+  const units = new Map(); // folder id ('' = the main folder) -> {drive, links: Map(peer id -> DriveLink), memories, error}
+  // memories: Map(peer id -> DriveLink's memory): where we are in that computer's index of the folder and
+  // its reconnects, across its sessions (a link is made per session); gone with the folder's engine.
+  const theirs = new Map(); // peer id -> Map(f -> name): the extra folders it shares with us
+  const cfg = () => {
+    const c = settings.drive || (settings.drive = { on: false, folder: '' });
+    if (!Array.isArray(c.folders)) c.folders = [];
+    return c;
+  };
+  const def = (f) => (f ? cfg().folders.find((x) => x.id === f) || null : { id: '', name: '', path: cfg().folder, devices: cfg().devices });
+  const folder = () => cfg().folder || defaultFolder();
+  const pathOf = (f) => {
+    if (!f) return folder();
+    const d = def(f);
+    return d ? DF.pathOf(d) : DF.defaultPath('');
+  };
+  const allows = (f, id) => { const d = def(f); return !!d && (!Array.isArray(d.devices) || d.devices.includes(id)); };
+  const canLink = (f, id) => !!id && mesh.isComputer(id) && allows(f, id) && (!f || !!(theirs.get(id) && theirs.get(id).has(f)));
+
+  const open = (f, id) => {
+    const u = units.get(f);
+    if (!u || !u.drive || !canLink(f, id)) return null;
+    if (u.links.has(id)) return u.links.get(id);
+    if (!u.memories.has(id)) u.memories.set(id, {});
+    const l = new DriveLink({ drive: u.drive, folder: f, send: (m) => mesh.send(id, m), session: () => mesh.session(id), peerName: () => mesh.peerName(id), onChange, memory: u.memories.get(id) });
+    u.links.set(id, l);
     return l;
   };
-  const close = (id) => {
-    const l = links.get(id);
+  const close = (f, id) => {
+    const u = units.get(f);
+    const l = u && u.links.get(id);
     if (!l) return;
-    links.delete(id);
+    u.links.delete(id);
     l.destroy();
     onChange();
   };
+  // Every link that may run now runs, the rest close (a device list or what a computer shares changed).
+  const settle = () => {
+    for (const [f, u] of units) {
+      for (const id of [...u.links.keys()]) if (!canLink(f, id)) close(f, id);
+      for (const id of mesh.connectedIds()) if (!u.links.has(id)) { const l = open(f, id); if (l) l.start(); }
+    }
+    onChange();
+  };
+  const tell = (id) => {
+    if (!running || !mesh.isComputer(id)) return;
+    mesh.send(id, { t: FOLDERS, list: cfg().folders.filter((d) => allows(d.id, id)).map((d) => ({ f: d.id, name: d.name })) });
+  };
+  const tellAll = () => { for (const id of mesh.connectedIds()) tell(id); };
 
-  // Registered once (the bus can't unregister): with Drive off they find no link and do nothing.
+  // Registered once (the bus can't unregister): with Drive off they find no unit and do nothing.
   const hook = () => {
     if (hooked) return;
     hooked = true;
     for (const t of DRIVE_TYPES) {
       mesh.on(t, (m, from) => {
-        const l = links.get(from) || (drive && t === P.T.DRIVE_HELLO ? open(from) : null);
+        const f = m && typeof m.f === 'string' ? m.f.slice(0, 40) : '';
+        const u = units.get(f);
+        if (!u) return;
+        const l = u.links.get(from) || (t === P.T.DRIVE_HELLO ? open(f, from) : null);
         if (l) l.onMessage(m);
       });
     }
-    mesh.onPeer('welcome', (id) => { const l = drive && open(id); if (l) l.start(); onChange(); });
-    mesh.onPeer('closed', (id) => close(id));
-    mesh.onPeer('transport', (id) => { const l = links.get(id); if (l) l.kick(); });
+    mesh.on(FOLDERS, (m, from) => {
+      if (!running || !mesh.isComputer(from)) return;
+      const list = new Map();
+      for (const x of Array.isArray(m && m.list) ? m.list.slice(0, MAX_FOLDERS) : []) {
+        if (x && typeof x.f === 'string' && /^[0-9a-f]{8,40}$/.test(x.f)) list.set(x.f, safeName(x.name));
+      }
+      theirs.set(from, list);
+      settle();
+    });
+    mesh.onPeer('welcome', (id) => {
+      if (!running) return;
+      tell(id);
+      const l = open('', id);
+      if (l) l.start();
+      onChange();
+    });
+    mesh.onPeer('closed', (id) => { for (const f of units.keys()) close(f, id); theirs.delete(id); onChange(); });
+    mesh.onPeer('transport', (id) => { for (const u of units.values()) { const l = u.links.get(id); if (l) l.kick(); } });
   };
 
-  // Our server's HTTPS: to the link of the host session whose token the request carries.
+  // Our server's HTTPS: the host session whose token the request carries, then its folder's link (&f=).
   const request = (req, res) => {
     if (!req.url.startsWith(PATH)) return false;
     const tok = req.headers[HEADER];
-    if (typeof tok === 'string' && tok) {
-      for (const [id, l] of links) {
+    let f = '';
+    try { f = new URL(req.url, 'https://x').searchParams.get('f') || ''; } catch { /* no folder: the main one */ }
+    const u = units.get(f);
+    if (u && typeof tok === 'string' && tok) {
+      for (const [id, l] of u.links) {
         const s = mesh.session(id);
         if (s && s.host && s.token === tok) return l.request(req, res);
       }
@@ -155,69 +174,143 @@ function createMesh({ settings, save, me, meName, userData, trash, mesh, onChang
     return true;
   };
 
-  async function start() {
-    if (drive) return;
-    const { Drive } = require('./drive.js');
-    ({ DriveLink, HEADER, PATH } = require('./drive-link.js'));
-    hook();
-    drive = new Drive({ me, meName, folder, indexFile: path.join(userData, 'drive-index.json'), trash });
+  async function startUnit(f) {
+    if (units.has(f)) return;
+    const u = { drive: null, links: new Map(), memories: new Map(), error: '' };
+    units.set(f, u);
+    const drive = new Drive({ me, meName, folder: () => pathOf(f), indexFile: path.join(userData, f ? `drive-index-${f}.json` : 'drive-index.json'), trash });
     drive.on('change', onChange);
-    mesh.setRequest(request);
+    u.drive = drive;
     try {
+      if (f) require('fs').mkdirSync(pathOf(f), { recursive: true });
       await drive.start();
-      error = '';
     } catch (e) {
-      error = e.message;
+      u.error = e.message;
     }
-    if (!drive) return; // turned off meanwhile
-    for (const id of mesh.connectedIds()) { const l = open(id); if (l) l.start(); }
+    if (units.get(f) !== u) return; // stopped meanwhile
+    for (const id of mesh.connectedIds()) { const l = open(f, id); if (l) l.start(); }
+    onChange();
+  }
+
+  async function stopUnit(f) {
+    const u = units.get(f);
+    if (!u) return;
+    for (const id of [...u.links.keys()]) close(f, id);
+    units.delete(f);
+    if (u.drive) await u.drive.stop();
+    onChange();
+  }
+
+  async function start() {
+    if (running) return;
+    const { Drive: D } = require('./drive.js');
+    Drive = D;
+    ({ DriveLink, HEADER, PATH } = require('./drive-link.js'));
+    running = true;
+    hook();
+    mesh.setRequest(request);
+    tellAll();
+    await Promise.all([...(cfg().on ? [startUnit('')] : []), ...cfg().folders.map((d) => startUnit(d.id))]); // Drive's own folder only while Drive is on
     onChange();
   }
 
   async function stop() {
+    running = false;
     mesh.setRequest(null);
-    for (const id of [...links.keys()]) close(id);
-    memories = new Map(); // a new engine (another folder, Drive switched on again): everything once
-    const d = drive;
-    drive = null;
-    if (d) await d.stop();
+    theirs.clear();
+    await Promise.all([...units.keys()].map((f) => stopUnit(f)));
     onChange();
   }
 
   const host = {
+    // TwinDesk Drive's own folder. The engine also runs for the shared folders, a separate feature.
     async setOn(on) {
       cfg().on = !!on;
       save();
-      if (on) await start();
-      else await stop();
+      if (on) { await start(); await startUnit(''); } else { await stopUnit(''); if (!cfg().folders.length) await stop(); }
+      onChange();
     },
     async setFolder(f) {
       cfg().folder = typeof f === 'string' ? f : '';
       save();
-      if (drive) { await stop(); await start(); }
+      if (running && cfg().on) { await stopUnit(''); await startUnit(''); }
       onChange();
     },
     folder,
+    // An extra folder: a new one (name, path?, devices?), or one a computer offered (its id). → its id
+    async addFolder({ id, name, path: p, devices } = {}) {
+      const c = cfg();
+      if (c.folders.length >= MAX_FOLDERS) return null;
+      const fid = typeof id === 'string' && /^[0-9a-f]{8,40}$/.test(id) ? id : require('crypto').randomBytes(8).toString('hex');
+      if (c.folders.some((x) => x.id === fid)) return fid;
+      let n = name;
+      if (!n) for (const l of theirs.values()) if (l.has(fid)) n = l.get(fid);
+      c.folders.push({ id: fid, name: safeName(n), path: typeof p === 'string' ? p : '', devices: cleanDevices(devices) });
+      save();
+      if (!running) await start(); // shared folders run the engine even with Drive off
+      else await startUnit(fid);
+      tellAll();
+      settle();
+      return fid;
+    },
+    // Stops syncing it here; its files stay where they are.
+    async removeFolder(fid) {
+      const c = cfg();
+      if (!c.folders.some((x) => x.id === fid)) return;
+      c.folders = c.folders.filter((x) => x.id !== fid);
+      save();
+      await stopUnit(fid);
+      tellAll();
+      if (!c.on && !c.folders.length) await stop(); // nothing left to run for
+      onChange();
+    },
+    // '' for the main folder; devices: 'all' or [ids].
+    setFolderDevices(fid, devices) {
+      const d = fid ? cfg().folders.find((x) => x.id === fid) : null;
+      if (fid && !d) return;
+      if (d) d.devices = cleanDevices(devices);
+      else cfg().devices = cleanDevices(devices);
+      save();
+      tellAll();
+      settle();
+    },
+    async setFolderPath(fid, p) {
+      const d = cfg().folders.find((x) => x.id === fid);
+      if (!d) return;
+      d.path = typeof p === 'string' ? p : '';
+      save();
+      if (running) { await stopUnit(fid); await startUnit(fid); }
+      onChange();
+    },
+    pathOf,
     view() {
-      const s = drive ? drive.status() : null;
-      let moving = 0;
-      const peers = [];
-      for (const [id, l] of links) {
-        const st = l.status();
-        moving += st.moving;
-        if (st.connected) peers.push(mesh.peerName(id));
-      }
+      const one = (f) => {
+        const u = units.get(f);
+        const s = u && u.drive ? u.drive.status() : null;
+        let moving = 0;
+        const peers = [];
+        if (u) for (const [id, l] of u.links) { const st = l.status(); moving += st.moving; if (st.connected) peers.push(mesh.peerName(id)); }
+        return {
+          state: s ? s.state : 'off', files: s ? s.files : 0, bytes: s ? s.bytes : 0,
+          skipped: s ? s.skipped : 0, conflicts: s ? s.conflicts : 0, lastSync: s ? s.lastSync : 0,
+          connected: peers.length > 0, moving, peer: peers.join(', '), error: (u && u.error) || (s && s.error) || '',
+        };
+      };
+      const c = cfg();
+      const computers = mesh.connectedIds().filter((id) => mesh.isComputer(id)).map((id) => ({ id, name: mesh.peerName(id) }));
+      const have = new Set(c.folders.map((d) => d.id));
+      const offers = new Map();
+      for (const [id, l] of theirs) for (const [f, name] of l) if (!have.has(f)) { const o = offers.get(f) || { f, name, from: [] }; o.from.push(mesh.peerName(id)); offers.set(f, o); }
       return {
-        on: cfg().on === true, folder: folder(), custom: !!cfg().folder,
-        state: s ? s.state : 'off', files: s ? s.files : 0, bytes: s ? s.bytes : 0,
-        skipped: s ? s.skipped : 0, conflicts: s ? s.conflicts : 0, lastSync: s ? s.lastSync : 0,
-        connected: peers.length > 0, moving, peer: peers.join(', '),
-        error: error || (s && s.error) || '',
+        on: c.on === true, folder: folder(), custom: !!c.folder, ...one(''),
+        devices: cleanDevices(c.devices), computers,
+        folders: c.folders.map((d) => ({ id: d.id, name: d.name, path: pathOf(d.id), custom: !!d.path, devices: cleanDevices(d.devices), ...one(d.id) })),
+        offers: [...offers.values()],
       };
     },
     stop,
   };
-  if (cfg().on) start();
+  if (cfg().on || cfg().folders.length) start();
   return host;
 }
 
@@ -252,4 +345,4 @@ function offView(settings) {
   return { on: false, folder: d.folder || defaultFolder(), custom: !!d.folder, state: 'off', files: 0, bytes: 0, skipped: 0, conflicts: 0, lastSync: 0, connected: false, moving: 0, peer: '', error: '' };
 }
 
-module.exports = { create, createMesh, hubAdapter, offView, defaultFolder };
+module.exports = { create, createMesh, soloMesh, hubAdapter, offView, defaultFolder };

@@ -39,6 +39,7 @@
 'use strict';
 
 const { lanType } = require('../../shared/lantype.js'); // Wi-Fi or Ethernet for Overview (#140)
+const FolderMenu = require('../../shared/foldermenu.js'); // the file manager's Share this folder
 const path = require('path');
 const { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, systemPreferences, Notification, dialog, globalShortcut } = require('electron');
 
@@ -108,9 +109,12 @@ function applyLocalApi() {
   if (!localApi) return;
   localApi.apply(!!settings.app.localApi).catch((e) => console.error('[api] ' + e.message)).then(() => pushState());
 }
+let folders = null; // File Sharing › Shared folders and the Share folder sheet (shared/folders-host.js)
+let drop = null; // Drop: one conversation with every device (shared/drop-host.js)
 let phoneHub = null; // Calls, Messages and Photos (loadHub); svc.hub is not used: the mesh's hub is `hub`
 let consent = null; // each device's own two-way switches (shared/consent.js)
 let edges = null; // the whole mesh's (shared/mesh-edges.js): the matrix
+let manage = null; // the phones' mesh manager (shared/mesh-manage.js)
 let devctl = null; // Overview's controls of the selected device (shared/devctl.js)
 let chats = null; // Messages' chat apps from a phone, kept per phone (shared/chats.js)
 
@@ -251,6 +255,7 @@ function publishState() {
     state.look = Look.view(settings.ui, systemPreferences); // General › Appearance
     state.mesh = settings.mesh;
     state.matrix = edges ? edges.view() : null; // the Multi-device tab's matrix (shared/mesh-edges.js)
+    state.manage = manage ? manage.pageView() : null; // Multi-device › Phones (shared/mesh-manage.js)
     state.debug = dbg ? dbg.view() : null; // Debug tab (shared/debug-start.js)
     state.localApi = localApi ? localApi.view() : null; // General › Local API
     state.app = settings.app;
@@ -305,9 +310,12 @@ function publishState() {
     state.hub = phoneHub ? phoneHub.view : { ...settings.hub, connected: false };
     if (svc && svc.phoneDrive) state.mount = { ...svc.phoneDrive.view, on: !!settings.mount.on };
     if (svc) state.drive = svc.drive ? svc.drive.view() : { on: false, folder: settings.drive.folder || require('path').join(require('os').homedir(), 'TwinDesk Drive'), custom: !!settings.drive.folder };
+    state.folders = folders ? folders.view() : null; // File Sharing › Shared folders, and the Share folder sheet
+    state.drop = drop ? drop.state() : null; // Drop (shared/drop-host.js): the page asks for the room when rev changes
     if (updates) state.updates = updates.view;
     if (pairSync) pairSync.check();
     if (edges) edges.tick(); // the matrix: ours to every device when it changed
+    if (manage) manage.tick(); // the mesh manager: what this Mac can do, to every device
     sendScreenState();
     if (win && !win.isDestroyed()) win.webContents.send('state', state);
     updateTray();
@@ -315,24 +323,127 @@ function publishState() {
 
 // Tell the viewer what we share, so it can show Start / Extend / Mirror itself
 // (screen.state); only when something changed or the peer is new.
+let screenInputOwner = null;
 let screenStateKey = '';
 let sharingBy = ''; // the device whose screen.ctl started our sharing ('' = this Mac's own menu): screen.state's by
+let previewShots = null;
+let previewPid = null; // the device whose Displays & desktops sheet asked for stills last (one at a time: one capture budget)
+
+// Displays & desktops stills (#264), for one device: its picture only. conn is the connection that device's
+// session.send writes (the guest link while up, else the host ctx); a released host is not used. Only the
+// display that device is shown is offered.
+function previewSample(pid = previewPid) {
+  const Preview = require('../../shared/display-preview.js');
+  if (!svc || !hub || pid == null) return null;
+  const session = hub.sessions.get(pid);
+  const conn = Preview.outbound(session);
+  if (!Preview.liveConn(conn)) return null;
+  const Spaces = require('../../shared/mac-spaces.js');
+  const st = svc.stream && svc.stream.byId ? svc.stream.byId.get(pid) : null;
+  const look = svc.spaceLook ? svc.spaceLook.current() : null;
+  const viewed = st && st.viewedDisplay ? st.viewedDisplay() : null;
+  const held = !!(svc.displays.holds && svc.displays.holds.has('apps-open'));
+  const offer = Spaces.catalogOffer(svc.displays.list(), { remote: settings.sharing.remote !== false, held, mesh: true });
+  const catalog = Spaces.desktopCatalog(look, viewed, offer.named, { offerDisplays: false });
+  const capture = viewed && Number.isSafeInteger(viewed.session) ? viewed.session : 0;
+  const viewGen = viewed && Number.isSafeInteger(viewed.generation) ? viewed.generation : -1;
+  const input = settings.sharing.remote !== false && settings.streamInput !== false;
+  return { conn, sharing: settings.sharing.on === true, input, catalog, capture, viewGen };
+}
+
+// A device's screen.preview.want, with the socket it came on (the bus hands it over, hub.js). Accepted only
+// on the connection that device's session writes: an ask on a host socket while the guest link is up is not.
+function onPreviewWant(m, pid, ws) {
+  const Preview = require('../../shared/display-preview.js');
+  if (!previewShots || !hub) return;
+  const session = hub.sessions.get(pid);
+  const inbound = require('../../shared/mac-spaces.js').meshSource(session, ws);
+  const sample = previewSample(pid);
+  const auth = Preview.authorizeWant(sample && sample.conn, inbound);
+  if (!auth || !inbound || auth.ws !== inbound.ws) return;
+  if (!m || m.on !== true) {
+    if (previewPid === pid && previewShots.watched && Preview.askEpoch(m && m.epoch) === previewShots.watched.epoch) previewShots.cancel('close');
+    return;
+  }
+  if (!sample.sharing || !sample.input) {
+    if (previewPid === pid) previewShots.cancel('session');
+    return;
+  }
+  const ask = Preview.askEpoch(m.epoch);
+  if (ask == null) return;
+  previewPid = pid; // another device's sheet: watch() ends the previous device's (its stills cleared on its own socket)
+  previewShots.watch(auth.conn, ask);
+}
 
 // To every connected device (each may watch this Mac's screen; the facade told the selected one only), once
 // per device and change.
 function sendScreenState() {
-  if (!svc || !hub) return void (screenStateKey = '');
+  updateScreenInputOwner();
+  if (!svc || !hub) {
+    screenStateKey = '';
+    if (previewShots) previewShots.kick();
+    return;
+  }
   // No display list. Mesh has one capture and one input target, and each device can be off or on
   // its own screen. A phone pick would clear that choice and move every viewer that follows it.
   if (!settings.sharing.on) sharingBy = '';
   // by: who asked for it. Only that device's Monitor 2 opens by itself; the others' would watch too, and
   // the picture went to whichever answered (a Monitor 2 on every computer of the mesh opened).
   const msg = { t: P.T.SCREEN_STATE, on: !!settings.sharing.on, mode: displayMode(), remote: settings.sharing.remote !== false, modes: ['extend', 'mirror'], by: sharingBy };
+  msg.input = !!svc.input.enabled(); // the screen-input gate: Android shows its touchpad cue only while input applies (#288)
   const ids = hub.bus.connectedIds();
-  const key = JSON.stringify([ids, msg]);
-  if (key === screenStateKey) return;
+  // Displays & desktops (#264), per device: the read covers every display (it never opens Mission Control
+  // nor changes a desktop, mac-helper Spaces.swift); each device's spaces and desktops are for the display
+  // that device is shown. Another viewer's display is not a choice for it.
+  const Spaces = require('../../shared/mac-spaces.js');
+  const viewedBy = new Map(ids.map((pid) => {
+    const st = svc.stream && svc.stream.byId ? svc.stream.byId.get(pid) : null;
+    return [pid, st && st.viewedDisplay ? st.viewedDisplay() : null];
+  }));
+  // Read only while a device is shown a display: nobody watching, no helper call. The read is fenced on the
+  // first such device's view (a read that raced its picture moving is not published); each device's own
+  // screen.desktops ask is fenced on its own view (DesktopRefresh).
+  const fenceId = [...viewedBy.keys()].find((pid) => viewedBy.get(pid));
+  if (svc.spaceLook && fenceId != null) svc.spaceLook.refresh({
+    view: () => {
+      const st = svc.stream && svc.stream.byId ? svc.stream.byId.get(fenceId) : null;
+      return st && st.viewedDisplay ? st.viewedDisplay() : null;
+    },
+  });
+  const look = svc.spaceLook ? svc.spaceLook.current() : null;
+  const offer = Spaces.catalogOffer(svc.displays.list(), { remote: settings.sharing.remote !== false, held: !!(svc.displays.holds && svc.displays.holds.has('apps-open')), mesh: true });
+  const spaceHold = Spaces.spaceHold(look);
+  const per = ids.map((pid) => {
+    const viewed = viewedBy.get(pid);
+    const m = { ...msg, spaces: Spaces.offerSpaces(look, viewed) };
+    const desktops = Spaces.desktopCatalog(look, viewed, offer.named, { offerDisplays: false });
+    if (desktops) m.desktops = desktops;
+    if (spaceHold) m.spaceHold = spaceHold;
+    return [pid, m];
+  });
+  const key = JSON.stringify(per);
+  if (key === screenStateKey) {
+    if (previewShots) previewShots.kick();
+    return;
+  }
   screenStateKey = key;
-  for (const pid of ids) hub.bus.send(pid, msg);
+  for (const [pid, m] of per) hub.bus.send(pid, m);
+  if (previewShots) previewShots.kick();
+}
+
+function updateScreenInputOwner() {
+  const c = peer && peer.current;
+  const scoped = c && svc && svc.stream.byId.get(c.deviceId)?.peer;
+  const socket = scoped && (scoped.current?.conn || scoped.current?.ws);
+  if (screenInputOwner && (screenInputOwner.peer !== scoped || screenInputOwner.socket !== socket)) {
+    const previous = screenInputOwner.peer.current;
+    if (previous && (previous.conn || previous.ws) === screenInputOwner.socket) {
+      screenInputOwner.peer.sendToClient({ t: P.T.STREAM_INPUT, on: false });
+    }
+    screenInputOwner = null;
+    screenStateKey = '';
+  }
+  if (scoped && socket) screenInputOwner = { peer: scoped, socket };
 }
 
 function displayPick(m) {
@@ -593,6 +704,12 @@ app.whenReady().then(() => {
   });
 
   discovery = new Discovery(id, server.port);
+  require('../../shared/sleepwake.js').sleepWake({
+    powerMonitor: require('electron').powerMonitor, server: () => server, discovery: () => discovery,
+    // A plain invite can reconnect a phone after Stop. Only invite paired computers seen since wake.
+    canInvite: (d, wokeAt) => d.lastSeen >= wokeAt && !P.isPhoneOs(d.os)
+      && pairing.list().some((p) => p.id === d.id && p.os === d.os),
+  });
   discovery.on('change', pushState);
   discovery.start();
   mesh = new Mesh({ selfId: id.macId });
@@ -648,11 +765,15 @@ app.whenReady().then(() => {
   hub.bus.onPeer('welcome', (pid) => {
     const x = hub.sessions.get(pid);
     if (x) console.log(`[peer] session with ${x.displayName()} (${x.peerOs}, ${x.role === 'host' ? 'we are its guest' : 'it is our guest'})`);
+    if (previewShots && pid === previewPid) previewShots.cancel('session'); // a new session: its old stills go
     pushState();
   });
   // Whether this Mac takes input from its stream: to every device (each may watch it), not only the selected one.
   hub.bus.onPeer('welcome', (pid) => hub.bus.send(pid, { t: P.T.STREAM_INPUT, on: settings.streamInput !== false }));
-  hub.bus.onPeer('closed', pushState);
+  hub.bus.onPeer('closed', (pid) => {
+    if (previewShots && pid === previewPid) previewShots.cancel('session');
+    pushState();
+  });
   // Overview's controls of the selected device, and this Mac's for it (shared/devctl.js).
   {
     const { DevCtl } = require('../../shared/devctl.js');
@@ -741,6 +862,24 @@ app.whenReady().then(() => {
     } });
     if (settings.app.localApi) applyLocalApi();
   }
+  previewShots = new (require('../display-shots.js').DisplayShots)({
+    helper: svc.helper,
+    readLocked: () => require('../console-lock').readLocked(),
+    freshLook: () => svc.helper.request('spacesLook', {}, 2000),
+    sample: () => previewSample(),
+    // To the device whose connection this is, while its session still writes on it.
+    send: (conn, msg) => {
+      const Preview = require('../../shared/display-preview.js');
+      if (!conn || !conn.ws || !hub) return;
+      for (const session of hub.sessions.list()) {
+        const bound = Preview.outbound(session);
+        if (bound === conn && bound.ws === conn.ws) return void session.send(msg);
+      }
+    },
+  });
+  require('electron').powerMonitor.on('lock-screen', () => {
+    if (previewShots) previewShots.cancel('session');
+  });
   // Audio › Microphone (shared/mic.js): loaded the first time one of its switches is on.
   svc.loadMic = () => {
     if (svc.mic || !(settings.audio.micSend || settings.audio.micReceive)) return svc.mic || null;
@@ -764,7 +903,17 @@ app.whenReady().then(() => {
     return svc.drive;
   };
   svc.getDrive = () => svc.drive || null;
-  if (settings.drive.on) svc.loadDrive();
+  if (settings.drive.on || (settings.drive.folders || []).length) svc.loadDrive(); // Drive, or shared folders
+  // Shared folders (shared/folders-host.js): the File Sharing card, and the sheet Finder's Share folder opens.
+  folders = require('../../shared/folders-host.js').foldersHost({
+    settings: () => settings, save: () => store.saveSettings(settings), push: pushState, getDrive: () => svc.getDrive(), loadDrive: () => svc.loadDrive(),
+    phoneShare: () => { const h = phoneHub || loadHub(); return h && h.share; },
+    devices: () => (hub ? hub.peers() : []).map((d) => ({ id: d.id, name: d.name, os: d.os, connected: d.state === 'connected' })),
+    pick: async () => { const r = await require('electron').dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] }); return r.canceled ? '' : r.filePaths[0] || ''; },
+    show: () => goTab('files'),
+    open: (f) => require('electron').shell.openPath(f),
+  });
+  for (const n of ['folderShare', 'folderSheet', 'folderAdd', 'folderRemove', 'folderDevices', 'folderAccept', 'folderDecline', 'folderOpen']) require('electron').ipcMain.on(n, (_e, a) => folders && folders.actions[n](a));
   // Apps › Move windows: a window grabbed with the move key crossed with the pointer. A
   // copy of the other computer's window goes home there (pcapps.js); one of this Mac's goes over (appsend.js).
   // In Multi-device it goes to the device the pointer went to, selected first, with what that
@@ -1048,6 +1197,7 @@ app.whenReady().then(() => {
   svc.kvm.blockEdge = () => blockEdge() || svc.phone.focused; // moving inside the phone window never crosses
   svc.apps.setSharing = (on, by) => actions.setSharing(on, by);
   hub.bus.on(P.T.SCREEN_CTL, (m, from) => onScreenCtl(m, from)); // from any device watching this Mac's screen
+  hub.bus.on(P.T.SCREEN_PREVIEW_WANT, (m, from, ws) => onPreviewWant(m, from, ws)); // Displays & desktops stills, per device
   // Two-way switches shared with the other computer, per pair (pairsync.js).
   const SYNC_ACTIONS = {
     clipboard: (dir, on) => actions.setClipboard({ [dir === 'out' ? 'send' : 'receive']: on }),
@@ -1083,6 +1233,14 @@ app.whenReady().then(() => {
       os: (pid) => (pid === id.macId ? P.OS.MAC : known(pid).os || ''),
       connected: (pid) => { const x = hub.sessions.get(pid); return !!x && x.connected; },
     });
+    // Drop (shared/drop.js): one conversation with every TwinDesk device, through this app's links.
+    drop = require('../../shared/drop-host.js').start({ selfId: id.macId, name: () => id.macName, os: P.OS.MAC, settings: () => settings, save: () => store.saveSettings(settings), push: pushState, hub }, () => win);
+    // The phones' mesh manager (shared/mesh-manage.js): a phone on any computer of the mesh wakes, locks,
+    // restarts… this Mac, answers its pairings and arranges the layout; Multi-device › Phones may refuse.
+    manage = require('../../shared/mesh-manage.js').onHub({
+      hub, mesh, selfId: id.macId, name: () => id.macName, os: P.OS.MAC, settings: () => settings, save: () => store.saveSettings(settings),
+      devLocal: devctl.local, wake: () => svc && svc.wake, layout: () => layoutSync, onChange: pushState,
+    });
   }
   // New releases on GitHub: a notification once per version, the menu bar item and About › Updates.
   updates = new Updates({
@@ -1101,11 +1259,13 @@ app.whenReady().then(() => {
   Look.applyTheme(nativeTheme, settings.ui.theme);
   nativeTheme.on('updated', () => pushState());
   setupWeb();
-  actions = setupIpc({ dbg: () => dbg, applyLocalApi, devctl: () => devctl, chats: () => chats, consent: () => consent,
+  actions = setupIpc({ dbg: () => dbg, applyLocalApi, devctl: () => devctl, chats: () => chats, consent: () => consent, edges: () => edges, manage: () => manage,
     syncAction: (f, dir, on) => SYNC_ACTIONS[f] && SYNC_ACTIONS[f](dir, on), // the matrix: the selected device's cell is the settings
     state, settings, pushState, onLanguage: changeLanguage, onLook: applyLook, t, server: peer, pairing, discovery, link: links, ...svc, hub, layoutSync, autoJoin, phoneHub: loadHub, login, refreshPermissions, updates });
   tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'trayTemplate.png'))); // "Template": macOS tints it
   hud = new Hud(() => settings);
+  for (const f of folderQueue.splice(0)) shareFolder(f); // Share this folder from Finder, before this was up
+  if (app.isPackaged) require('../finder').install(); // Finder › Quick Actions › Share with phone
   svc.kvm.on('where', (mode) => {
     // The device the pointer is with (the input peer, docs/mesh-graph.md), not the selected one.
     const ps = svc.kvm.partner ? hub.sessions.get(svc.kvm.partner) : null;
@@ -1136,7 +1296,9 @@ app.whenReady().then(() => {
         : { key: 'Double-tap {key} to turn it on', vars: { key } };
     hud.show(on ? 'linkOn' : 'linkOff', { key: on ? 'Cursor sharing on' : 'Cursor sharing off' }, sub);
   });
+  svc.filesRelay.notify = (key, vars) => hud.show('driven', { key: key.replace('file(s)', vars.count === 1 ? 'file' : 'files'), vars });
   svc.drop.on('batch', (b) => {
+    if (svc.filesRelay.done(b)) return; // a phone's batch for another device: passed on (shared/files-relay.js)
     if (svc.rz && svc.rz.received(b)) return; // a document taken here with ReZume: it opens
     // The device it came from (dropset.js: b.from), not the selected one.
     const from = b.from ? hub.sessions.get(b.from) : null;
@@ -1336,7 +1498,7 @@ const phonesLink = {
 };
 
 function setupHub() {
-  const anyOn = () => settings.hub.calls || settings.hub.messages || settings.hub.media || settings.hub.files || settings.hub.shareServe || settings.hub.tether;
+  const anyOn = () => settings.hub.calls || settings.hub.messages || settings.hub.media || settings.hub.files || settings.hub.shareServe || settings.hub.tether || !!(settings.drive.folders || []).length; // shared folders: the phone's are served
   phonesLink.on('client', (ctx) => P.isPhoneOs(ctx.os) && !phoneHub && anyOn() && loadHub());
   // The phone shares a folder: loaded for it (its listener comes with it, so this one passes it on).
   phonesLink.on(`t:${P.T.SHARE_OFFER}`, (m, ctx) => ctx && P.isPhoneOs(ctx.os) && !phoneHub && loadHub().share && phoneHub.share.onOffer(m));
@@ -1345,6 +1507,11 @@ function setupHub() {
 }
 
 let callwin = null;
+// Share this folder from Finder's Quick Action (shared/foldermenu.js, mac/finder.js): macshare://share-folder?h=….
+function shareFolder(dir) {
+  if (folders) folders.ask(dir); // the sheet: which devices (shared/folders-host.js)
+}
+
 function loadHub() {
   if (phoneHub) return phoneHub;
   const { PhoneHub } = require('../../shared/phonehub.js');
@@ -1400,6 +1567,16 @@ function goTab(tab) {
 }
 
 app.on('second-instance', showWindow);
+// Finder's Share this folder (mac/finder.js); before the window and the services exist it waits.
+let folderQueue = [];
+app.on('open-url', (e, url) => {
+  const folder = FolderMenu.fromUrl(url);
+  if (folder === null) return;
+  e.preventDefault();
+  if (!folder) return;
+  if (!settings || !hud) folderQueue.push(folder);
+  else shareFolder(folder);
+});
 // TwinDesk Web in Multi-device: the same server, pairings and pages as the one-to-one app (one
 // userData), with this Mac's screen mirrored (Extend stays the mesh's), its sound, input and the rest.
 function setupWeb() {

@@ -62,6 +62,7 @@ const DEFAULT_SETTINGS = {
     scrollSpeed: 1, // Scrolling speed here: another computer's wheel on this Mac (shared/wheelscale.js, #315)
     linked: true, // mouse and keyboard sharing on (the hotkey's double-tap switches it); synced with the peer
     linkedBy: {}, // The last `linked` per paired device id, restored on connect
+    portalsOn: false, // Cursor portals (Mouse › Cursor portals): off by default; on, Hold key to switch steps aside
     portalsByPeer: {}, // opt-in directional display-edge portals, stored per paired device
     gestures: true, // Trackpad gestures work on the other computer (synced per pair)
     shakeHome: false, // shake this Mac's mouse while driving: the pointer comes home (the helper's Shake.swift)
@@ -89,7 +90,7 @@ const DEFAULT_SETTINGS = {
   ui: { tab: 'overview', setupSkipped: '', setupDone: false, language: '', style: 'glass', theme: 'system', accent: '' }, // style/theme/accent: General › Appearance
   app: { openAtLogin: false, keepAwake: true, hud: true, inputProtocol: 'udp', keepPinging: false, localApi: false, lockTogether: false }, // lockTogether: General › Lock together (shared/locksync.js) // localApi: General › Local API (shared/localapi.js), off // inputProtocol: udp = tdv2 input lane, tcp = tdv1 // hud = popup when switching computers
   updates: { auto: true, notified: '', skipped: '', install: false }, // check GitHub for new releases; notified = last version announced, skipped = version ignored
-  audio: { send: false, receive: false, muteLocal: false, engine: 'helper', volume: 1, phoneMedia: false, micSend: false, micReceive: false, micDevice: '', micOut: '' }, // Independent, both ways; phoneMedia: a phone's media controls on Overview
+  audio: { send: false, receive: false, muteLocal: false, engine: 'helper', volume: 1, phoneMedia: false, micSend: false, micReceive: false, micDevice: '', micOut: '', routes: {}, sync: false }, // Independent, both ways; phoneMedia: a phone's media controls on Overview
   rezume: require('../shared/rezume.js').DEFAULTS, // ReZume tab (shared/rezume.js): off until turned on; what goes, which ways, where it shows
   remote: { allow: false }, // Remote tab (shared/phone-remote.js): the phone's Remote page moves the pointer and types here
   camera: { on: false, share: false, device: '', virtual: false, rotate: 0, target: 'obs' }, // Camera tab (shared/camshare.js): this Mac's camera to the other computer, off until turned on; virtual: the running camera's picture also goes to the virtual camera (shared/vcam.js); rotate: its picture turned clockwise; target: the virtual camera it feeds, 'obs' (OBS Virtual Camera, the default) or 'twindesk'
@@ -99,11 +100,11 @@ const DEFAULT_SETTINGS = {
     outboxHours: 24, // Keep files to send: hours they wait for the other device (shared/outbox.js), 0 = off
     plain: false, // Encrypt file transfers off: plain HTTP for file bytes where both allow it (shared/fastfile.js fxPlain)
     shortcuts: false, copyKeys: 'Control+Alt+C', pasteKeys: 'Control+Alt+V' }, // Copy/paste files
-  notifs: { send: false, receive: false, hideText: false, muted: [], style: '', otpCopy: false, quiet: { on: false, from: '22:00', to: '07:00' }, phoneApps: {} }, // style…phoneApps: how a phone's show here (shared/notifrules.js)
+  notifs: { send: false, receive: false, hideText: false, muted: [], style: '', otpCopy: false, takeAll: false, quiet: { on: false, from: '22:00', to: '07:00' }, phoneApps: {}, fromApps: {} }, // style…phoneApps: how a phone's show here (shared/notifrules.js)
   apps: { offer: false, onVirtual: false, moveWindows: false, moveKey: 'MetaRight' }, // The PC can list and open this Mac's apps; onVirtual: they open on the virtual display, in Mirror mode too (off: on the shared display, as always); moveWindows: a window dragged past the edge with moveKey held moves there (movewin.js)
   papps: { on: false }, // PC apps on this Mac, each window here with its own Dock icon
   // A phone as the peer: its screen window, apps and setup.
-  phone: { sound: false, bitrateMbps: 8, maxSize: 0, wallpaper: true, input: 'adb', inputPicked: false, mirror: 'auto', soundVia: 'auto', enterSends: true, arrowSwipe: false, hover: true, uhid: false, direct: false, lowLatency: false }, // mirror, soundVia: 'auto' | 'adb' | 'native' (shared/phonemodes.js) // input: 'adb' | 'phone' (phone-bridge.js ctl), automatic until picked (inputMode)
+  phone: { sound: false, bitrateMbps: 8, maxSize: 0, wallpaper: true, input: 'adb', inputPicked: false, mirror: 'auto', soundVia: 'auto', enterSends: true, arrowSwipe: false, hover: true, uhid: false, direct: false, lowLatency: false, keepPanelOff: false }, // mirror, soundVia: 'auto' | 'adb' | 'native' (shared/phonemodes.js) // input: 'adb' | 'phone' (phone-bridge.js ctl), automatic until picked (inputMode)
   mount: { on: false }, // the phone in Finder (phonedrive.js), only when Mount is clicked
   drive: { on: false, folder: '' }, // File Sharing › TwinDesk Drive (shared/drive-host.js): off until turned on; folder '' = ~/TwinDesk Drive
   // Calls, Messages, Photos and Files from a phone (shared/phonehub.js), each off until switched on.

@@ -6,7 +6,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const ACTIONS = [
   'setSharing', 'setStreamTarget', 'setStreamInput', 'selectDisplay', 'setDisplayMode', 'setVirtual', 'setStreamMaxHeight',
-  'setBitrate', 'setKvm', 'setApp', 'setAudio', 'camera', 'setRemote', 'deckSave', 'deckTry', 'iosSign', 'iosSignIpa', 'setRezume', 'rezumeDo', 'phoneMedia', 'phoneBtPick', 'setTerminal', 'openSharingSettings', 'setFiles', 'setDrive', 'pickDriveFolder', 'resetDriveFolder', 'openDriveFolder', 'pickDropFolder', 'resetDropFolder', 'revealDrop', 'clearFiles', 'pauseSend', 'resumeSend', 'forgetSend', 'setSmb', 'setShareMac', 'chooseShareFolder', 'stopSharingFolder', 'openPcShare', 'openDrive', 'setApps', 'setReceive', 'showPcView', 'closePcView', 'setPcApps', 'listPcApps', 'openPcApp', 'openPcShell', 'setScreenSound', 'setKeys', 'setClipboard', 'copyHistory', 'openClip', 'clearHistory', 'history', 'setTab', 'setLanguage', 'setLook', 'setSharingOpts', 'remoteScreen', 'wakePeer', 'setWakeOnLan',
+  'setBitrate', 'setKvm', 'setPortals', 'setApp', 'setAudio', 'camera', 'setRemote', 'deckSave', 'deckTry', 'iosSign', 'iosSignIpa', 'setRezume', 'rezumeDo', 'phoneMedia', 'phoneBtPick', 'setTerminal', 'openSharingSettings', 'setFiles', 'setDrive', 'pickDriveFolder', 'resetDriveFolder', 'openDriveFolder', 'folderShare', 'folderSheet', 'folderAdd', 'folderRemove', 'folderDevices', 'folderAccept', 'folderDecline', 'folderOpen', 'pickDropFolder', 'resetDropFolder', 'revealDrop', 'clearFiles', 'pauseSend', 'resumeSend', 'forgetSend', 'setSmb', 'setShareMac', 'chooseShareFolder', 'stopSharingFolder', 'openPcShare', 'openDrive', 'setApps', 'setReceive', 'showPcView', 'closePcView', 'setPcApps', 'listPcApps', 'openPcApp', 'openPcShell', 'setScreenSound', 'setKeys', 'setClipboard', 'copyHistory', 'openClip', 'clearHistory', 'history', 'setTab', 'setLanguage', 'setLook', 'setSharingOpts', 'remoteScreen', 'wakePeer', 'setWakeOnLan',
   'pairRespond', 'forget', 'openSettings', 'relaunch', 'setModules', 'setMulti',
   'keepPcAppInDock', 'sendFiles', 'chooseSendFiles', 'setNotifs', 'muteNotifApp', 'allowFullDisk',
   'connectAddress', 'pairWith', 'selectPeer', 'forgetPeer', 'confirmGuestCode', 'cancelGuestPair', 'forgetHost',
@@ -32,10 +32,16 @@ const api = {
 };
 for (const name of ACTIONS) api[name] = (arg) => ipcRenderer.send(name, arg);
 api.phoneCamera = (open, opts) => ipcRenderer.send('phoneCamera', { open, opts }); // Camera › Start and Window: {facing, show}, sent as one
+api.setStreamTarget = (id, choice) => ipcRenderer.send('setStreamTarget', { id, choice }); // two values, sent as one (the loop above sends one)
 api.setReZume = api.setRezume; // the shared ReZume page (shared/ui-rezume.js) says it the PC's way
+api.setCell = (from, to, feature, on) => ipcRenderer.send('setCell', { from, to, feature, on }); // Notifications › Across devices: any cell
 api.setConsent = (id, feature, dir, on) => ipcRenderer.send('setConsent', { id, feature, dir, on }); // the matrix: one of this Mac's own cells
+api.setManage = (o) => ipcRenderer.send('setManage', o); // Multi-device › Phones (shared/mesh-manage.js)
 api.deckApps = () => ipcRenderer.invoke('deckApps'); // the Deck page's app picker
-api.deckState = () => ipcRenderer.invoke('deckState'); // its sound, Bluetooth and display pickers
+api.deckState = () => ipcRenderer.invoke('deckState');
+api.drop = (o) => ipcRenderer.invoke('drop', o); // Drop (shared/drop-host.js)
+api.soundRoute = (o) => ipcRenderer.invoke('soundRoute', o); // Audio › the mixer
+api.soundVolume = (level) => ipcRenderer.invoke('soundVolume', level); // its sound, Bluetooth and display pickers
 api.deckPick = (o) => ipcRenderer.invoke('deckPick', o); // a file, folder or script for a tile
 api.deckRun = (action) => ipcRenderer.invoke('deckRun', action); // Try: {ok, why}
 api.debugAsk = (to, op, args) => ipcRenderer.invoke('debugAsk', to, op, args); // Debug: ask a device of the mesh (or 'self')
