@@ -52,7 +52,7 @@ function showsObservedPlatformState() {
   assert.equal(mac.hint('Local Network'), 'Allowed');
   assert.equal(mac.hint('Screen Recording'), 'Allowed');
   assert.equal(mac.hint('Wireless debugging'), 'Ready');
-  assert.equal(mac.hint('Screen sharing'), '2560 × 1440 · 30 fps · 8 Mb/s');
+  assert.equal(mac.hint('Screen sharing'), '2560 × 1440, 30 fps, 8 Mb/s');
   mac.toggle();
   mac.card.update({ link: { state: 'reconnecting' } });
   assert.equal(mac.card.el.children[0].hidden, true, 'connection updates leave Doctor collapsed');
