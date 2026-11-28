@@ -9,3 +9,14 @@ try {
 } catch {
   document.documentElement.classList.add('glass');
 }
+
+// While the window isn't the one in front (behind another, or hidden), what animates on its own
+// stands still (ui-look.css .still): a connected device's breathing dot alone repaints the whole
+// window 60 times a second for as long as it's open. It goes on from there when the window is back.
+(() => {
+  const still = () => document.documentElement.classList.toggle('still', document.hidden || !document.hasFocus());
+  addEventListener('focus', still);
+  addEventListener('blur', still);
+  document.addEventListener('visibilitychange', still);
+  still();
+})();

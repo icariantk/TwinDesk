@@ -96,7 +96,9 @@ const indexed = (who) => sent[who].filter((m) => m.t === P.T.DRIVE_INDEX).reduce
   assert.ok(memG.have && memG.have.e === H.epoch, 'the guest knows where it is in the host\'s index');
   assert.ok(memH.have && memH.have.e === G.epoch);
 
-  // Back with nothing changed: no entries either way.
+  // Back with nothing changed: no entries either way, and neither index is written again.
+  let saves = 0;
+  for (const d of [H, G]) { const save = d._save.bind(d); d._save = () => { saves++; save(); }; }
   drop();
   connect();
   await sleep(400);
@@ -104,6 +106,7 @@ const indexed = (who) => sent[who].filter((m) => m.t === P.T.DRIVE_INDEX).reduce
   await idle(guest);
   assert.strictEqual(indexed('host'), 0, 'nothing changed: the host sends no entries');
   assert.strictEqual(indexed('guest'), 0, 'nor the guest');
+  assert.strictEqual(saves, 0, 'a merge that changed nothing doesn\'t write the index');
   assert.ok(sent.host.some((m) => m.t === P.T.DRIVE_INDEX && m.last && m.upto), 'an empty last part says where the index is');
 
   // A change while apart: only that one.
